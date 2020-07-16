@@ -8,7 +8,7 @@ import Prelude (error)
 import Foreign.Ptr (Ptr)
 import Foreign.Marshal.Alloc (allocaBytesAligned)
 import Foreign.Storable (Storable(..))
-import Foreign.C.Types (CChar)
+import Foreign.C.Types (CChar, CInt)
 
 #include <hdf5.h>
 #include <hdf5_hl.h>
@@ -19,6 +19,8 @@ type Hsize = {#type hsize_t#}
 type Hssize = {#type hssize_t#}
 type Htri = {#type htri_t#}
 type Hbool = {#type hbool_t#}
+
+type CSize = {#type size_t#}
 
 {#typedef herr_t Herr#}
 {#typedef hid_t Hid#}
@@ -60,6 +62,7 @@ instance Enum H5F_ACC where
 
 {#enum H5_iter_order_t {} #}
 {#enum H5_index_t {} #}
+{#enum H5T_class_t {} #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -90,4 +93,16 @@ h5g_get_num_objs groupId =
       else do
         count <- peekByteOff ptr {#offsetof H5G_info_t->nlinks#} :: IO {#type hsize_t#}
         return $ fromIntegral count
+-- hid_t H5Gcreate2( hid_t loc_id, const char *name, hid_t lcpl_id, hid_t gcpl_id, hid_t gapl_id )
+{#fun H5Gcreate2 as h5g_create { `Hid', `String', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' #}
+-- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
+{#fun H5Ldelete as h5l_delete { `Hid', `String', `H5P_DEFAULT' } -> `Herr' #}
+
+-- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
+{#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
+-- herr_t H5LTget_dataset_ndims ( hid_t loc_id, const char *dset_name, int *rank )
+{#fun H5LTget_dataset_ndims as h5lt_get_dataset_ndims { `Hid', `String', id `Ptr CInt' } -> `Herr' #}
+-- herr_t H5LTget_dataset_info ( hid_t loc_id, const char *dset_name, hsize_t *dims, H5T_class_t *class_id, size_t *type_size )
+-- NOTE: underlying type of C enum is int, so we cheat a little
+{#fun H5LTget_dataset_info as h5lt_get_dataset_info { `Hid', `String', id `Ptr Hsize', id `Ptr CInt', id `Ptr CSize' } -> `Herr' #}
 
