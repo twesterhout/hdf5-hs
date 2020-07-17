@@ -61,6 +61,9 @@ common common-options
                        ViewPatterns
                        DerivingStrategies
                        BangPatterns
+                       RankNTypes
+                       GADTs
+                       PatternSynonyms
 
 library
   import:              common-options
@@ -68,6 +71,7 @@ library
   build-tool-depends:  c2hs:c2hs >= 0.28.6
   build-depends:     , directory
                      , safe-exceptions
+                     , vector
   exposed-modules:     Hdf5Hs
                      , Data.HDF5
                      , Data.HDF5.Internal

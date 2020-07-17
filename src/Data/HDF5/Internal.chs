@@ -62,7 +62,7 @@ instance Enum H5F_ACC where
 
 {#enum H5_iter_order_t {} #}
 {#enum H5_index_t {} #}
-{#enum H5T_class_t {} #}
+{#enum H5T_class_t {} deriving(Eq, Show) #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -105,4 +105,4 @@ h5g_get_num_objs groupId =
 -- herr_t H5LTget_dataset_info ( hid_t loc_id, const char *dset_name, hsize_t *dims, H5T_class_t *class_id, size_t *type_size )
 -- NOTE: underlying type of C enum is int, so we cheat a little
 {#fun H5LTget_dataset_info as h5lt_get_dataset_info { `Hid', `String', id `Ptr Hsize', id `Ptr CInt', id `Ptr CSize' } -> `Herr' #}
-
+-- herr_t H5LTread_dataset ( hid_t loc_id, const char *dset_name, hid_t type_id, void *buffer )

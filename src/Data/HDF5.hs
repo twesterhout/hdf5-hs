@@ -9,14 +9,25 @@ module Data.HDF5
     h5FoldlM,
     h5FindDataset,
     h5GetNumDims,
+    h5GetDatasetInfo,
+    h5ReadDataset,
+    H5Handle (..),
+    H5Exception (..),
+    H5ConcreteBlob (..),
+    H5Blob (..),
+    toConcreteBlob,
+    pattern H5FloatBlob,
   )
 where
 
 import Control.Exception.Safe hiding (handle)
 import Data.HDF5.Internal
+import Data.Typeable
+import Data.Vector.Storable (Vector)
 import Foreign.C.String (peekCString)
+import Foreign.C.Types
 import Foreign.Marshal.Alloc (alloca, allocaBytes)
-import Foreign.Marshal.Array (allocaArray)
+import Foreign.Marshal.Array (allocaArray, peekArray)
 import Foreign.Ptr (nullPtr)
 import Foreign.Storable (Storable (..))
 import Relude
@@ -36,6 +47,21 @@ data H5Exception = H5Exception !Hid !(Maybe Text)
   deriving stock (Eq, Show, Generic)
 
 instance Exception H5Exception
+
+data H5ConcreteBlob a = H5ConcreteBlob {-# UNPACK #-} !(Vector a) ![Int]
+  deriving stock (Show)
+
+data H5Blob where
+  H5Blob :: Typeable a => H5ConcreteBlob a -> H5Blob
+
+toConcreteBlob :: Typeable a => H5Blob -> Maybe (H5ConcreteBlob a)
+toConcreteBlob (H5Blob x) = cast x
+
+pattern H5FloatBlob v n <- (toConcreteBlob @Float -> Just (H5ConcreteBlob v n))
+
+
+data H5DatasetInfo = H5DatasetInfo ![Int] !H5T_class_t !Int
+  deriving stock (Eq, Show)
 
 h5Check :: (Integral a, MonadThrow m) => Maybe Text -> a -> m a
 h5Check msg !code = (when (code < 0) . throwIO) (H5Exception code' msg) >> return code
@@ -150,15 +176,21 @@ h5GetNumDims parent path = do
     getNumDims ptr = h5lt_get_dataset_ndims (unHandle parent) (toString path) ptr
     msg = Just $ "failed to get number of dimensions of " <> show path
 
--- h5GetDatasetInfo :: (MonadIO m, MonadThrow m) => H5Handle -> Text -> m Int
--- h5GetDatasetInfo parent path = liftIO $ do
---   numDims <- h5GetNumDims parent path
---   allocaArray numDims $ \dimsPtr ->
---     alloca $ \classIdPtr ->
---       alloca $ \typeSizePtr -> undefined
+h5GetDatasetInfo :: (MonadIO m, MonadThrow m) => H5Handle -> Text -> m H5DatasetInfo
+h5GetDatasetInfo parent path = do
+  numDims <- h5GetNumDims parent path
+  liftIO $
+    allocaArray numDims $ \dimsPtr ->
+      alloca $ \classIdPtr ->
+        alloca $ \typeSizePtr -> do
+          h5Check msg =<< getInfo dimsPtr classIdPtr typeSizePtr
+          H5DatasetInfo
+            <$> (fmap fromIntegral <$> peekArray numDims dimsPtr)
+            <*> (toEnum . fromIntegral <$> peek classIdPtr)
+            <*> (fromIntegral <$> peek typeSizePtr)
+  where
+    getInfo = h5lt_get_dataset_info (unHandle parent) (toString path)
+    msg = Nothing
 
--- {#fun H5LTget_dataset_info as h5lt_get_dataset_info { `Hid', `String', id `Ptr Hsize', id `Ptr CInt', id `Ptr CSize' } -> `Herr' #}
---
---
---
---
+h5ReadDataset :: (MonadIO m, MonadThrow m) => H5Handle -> Text -> m H5Blob
+h5ReadDataset = undefined
