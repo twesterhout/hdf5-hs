@@ -65,6 +65,7 @@ instance Enum H5F_ACC where
 {#enum H5_index_t {} #}
 {#enum H5T_class_t {} deriving(Eq, Show) #}
 {#enum H5E_direction_t {} #}
+{#enum H5LT_lang_t {} #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -160,6 +161,18 @@ printError n errInfo _ = do
 -- herr_t H5Eset_auto2( hid_t estack_id, H5E_auto2_t func, void *client_data )
 {#fun H5Eset_auto2 as h5e_set_auto { `Hid', id `FunPtr H5E_auto2_t', `Ptr ()' } -> `Herr' #}
 
+-- hid_t H5Dget_type(hid_t dataset_id )
+{#fun H5Dget_type as h5d_get_type { `Hid' } -> `Hid' #}
+-- hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
+{#fun H5Dopen2 as h5d_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
+-- herr_t H5Dclose( hid_t dataset_id )
+{#fun H5Dclose as h5d_close { `Hid' } -> `Herr' #}
+
+-- herr_t H5Tclose( hid_t dtype_id )
+{#fun H5Tclose as h5t_close { `Hid' } -> `Herr' #}
+-- htri_t H5Tequal( hid_t dtype_id1, hid_t dtype_id2 )
+{#fun H5Tequal as h5t_equal { `Hid', `Hid' } -> `Htri' #}
+
 -- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
 {#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
 -- herr_t H5LTget_dataset_ndims ( hid_t loc_id, const char *dset_name, int *rank )
@@ -167,31 +180,40 @@ printError n errInfo _ = do
 -- herr_t H5LTget_dataset_info ( hid_t loc_id, const char *dset_name, hsize_t *dims, H5T_class_t *class_id, size_t *type_size )
 -- NOTE: underlying type of C enum is int, so we cheat a little
 {#fun H5LTget_dataset_info as h5lt_get_dataset_info { `Hid', `String', id `Ptr Hsize', id `Ptr CInt', id `Ptr CSize' } -> `Herr' #}
+-- herr_t H5LTdtype_to_text(hid_t datatype, char* str, H5LT_lang_t lang_type, size_t* len)
+{#fun H5LTdtype_to_text as h5lt_dtype_to_text { `Hid', id `Ptr CChar', `H5LT_lang_t', id `Ptr CSize' } -> `Herr' #}
 
+-- herr_t H5LTread_dataset ( hid_t loc_id, const char *dset_name, hid_t type_id, void *buffer )
+{#fun H5LTread_dataset as h5lt_read_dataset { `Hid', `String', `Hid', `Ptr ()' } -> `Herr' #}
 -- herr_t H5LTread_dataset_char ( hid_t loc_id, const char *dset_name, char *buffer )
-{#fun H5LTread_dataset_char as h5lt_read_dataset_char { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
+-- {#fun H5LTread_dataset_char as h5lt_read_dataset_char { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
 -- herr_t H5LTread_dataset_short ( hid_t loc_id, const char *dset_name, short *buffer )
-{#fun H5LTread_dataset_short as h5lt_read_dataset_short { `Hid', `String', id `Ptr CShort' } -> `Herr' #}
+-- {#fun H5LTread_dataset_short as h5lt_read_dataset_short { `Hid', `String', id `Ptr CShort' } -> `Herr' #}
 -- herr_t H5LTread_dataset_float ( hid_t loc_id, const char *dset_name, float *buffer )
-{#fun H5LTread_dataset_float as h5lt_read_dataset_float { `Hid', `String', id `Ptr CFloat' } -> `Herr' #}
+-- {#fun H5LTread_dataset_float as h5lt_read_dataset_float { `Hid', `String', id `Ptr CFloat' } -> `Herr' #}
 -- herr_t H5LTread_dataset_double ( hid_t loc_id, const char *dset_name, double *buffer )
-{#fun H5LTread_dataset_double as h5lt_read_dataset_double { `Hid', `String', id `Ptr CDouble' } -> `Herr' #}
+-- {#fun H5LTread_dataset_double as h5lt_read_dataset_double { `Hid', `String', id `Ptr CDouble' } -> `Herr' #}
 -- herr_t H5LTread_dataset_int ( hid_t loc_id, const char *dset_name, int *buffer )
-{#fun H5LTread_dataset_int as h5lt_read_dataset_int { `Hid', `String', id `Ptr CInt' } -> `Herr' #}
+-- {#fun H5LTread_dataset_int as h5lt_read_dataset_int { `Hid', `String', id `Ptr CInt' } -> `Herr' #}
 -- herr_t H5LTread_dataset_long ( hid_t loc_id, const char *dset_name, long *buffer )
-{#fun H5LTread_dataset_long as h5lt_read_dataset_long { `Hid', `String', id `Ptr CLong' } -> `Herr' #}
+-- {#fun H5LTread_dataset_long as h5lt_read_dataset_long { `Hid', `String', id `Ptr CLong' } -> `Herr' #}
 -- herr_t H5LTread_dataset_string ( hid_t loc_id, const char *dset_name, char *buffer )
-{#fun H5LTread_dataset_string as h5lt_read_dataset_string { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
+-- {#fun H5LTread_dataset_string as h5lt_read_dataset_string { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
 
+-- herr_t H5LTmake_dataset ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, hid_t type_id, const void*buffer )
+{#fun H5LTmake_dataset as h5lt_make_dataset { `Hid', `String', `Int', id `Ptr Hsize', `Hid', id `Ptr ()' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_char ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const char *buffer )
-{#fun H5LTmake_dataset_char as h5lt_make_dataset_char { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CChar' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_char as h5lt_make_dataset_char { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CChar' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_short ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const short *buffer )
-{#fun H5LTmake_dataset_short as h5lt_make_dataset_short { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CShort' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_short as h5lt_make_dataset_short { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CShort' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_int ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const int *buffer )
-{#fun H5LTmake_dataset_int as h5lt_make_dataset_int { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CInt' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_int as h5lt_make_dataset_int { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CInt' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_long ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const long *buffer )
-{#fun H5LTmake_dataset_long as h5lt_make_dataset_long { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CLong' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_long as h5lt_make_dataset_long { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CLong' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_float ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const float *buffer )
-{#fun H5LTmake_dataset_float as h5lt_make_dataset_float { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CFloat' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_float as h5lt_make_dataset_float { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CFloat' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_double ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const double*buffer )
-{#fun H5LTmake_dataset_double as h5lt_make_dataset_double { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CDouble' } -> `Herr' #}
+-- {#fun H5LTmake_dataset_double as h5lt_make_dataset_double { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CDouble' } -> `Herr' #}
+
+foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid
+foreign import ccall unsafe "&H5T_NATIVE_DOUBLE_g" h5t_NATIVE_DOUBLE :: Ptr Hid

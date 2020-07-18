@@ -65,6 +65,7 @@ common common-options
                        GADTs
                        PatternSynonyms
                        FlexibleContexts
+                       FlexibleInstances
 
 library
   import:              common-options

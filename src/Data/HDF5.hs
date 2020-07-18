@@ -11,6 +11,7 @@ module Data.HDF5
     h5GetNumDims,
     h5GetDatasetInfo,
     readDataset,
+    readTypedDataset,
     disableDiagOutput,
     H5Handle (..),
     H5Exception (..),
@@ -22,6 +23,7 @@ module Data.HDF5
     pattern H5Int64Blob,
     pattern H5FloatBlob,
     pattern H5DoubleBlob,
+    H5NativeDatatype (..),
   )
 where
 
@@ -35,12 +37,13 @@ import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (peekCString)
 import Foreign.C.Types
 import Foreign.Marshal.Alloc (alloca, allocaBytes)
-import Foreign.Marshal.Array (allocaArray, peekArray)
-import Foreign.Ptr (Ptr, freeHaskellFunPtr, nullFunPtr, nullPtr)
+import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
+import Foreign.Ptr (Ptr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable (..))
 import qualified GHC.Show
 import Relude hiding (find, group)
 import System.Directory (doesFileExist)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- import Type.Reflection
 
@@ -78,10 +81,57 @@ data H5ConcreteBlob a = H5ConcreteBlob
   }
   deriving stock (Show)
 
-data H5Blob = forall a. H5DataType a => H5Blob !(H5ConcreteBlob a)
+data H5Blob = forall a. H5KnownDatatype a => H5Blob !(H5ConcreteBlob a)
 
 getDims :: H5Blob -> [Int]
 getDims (H5Blob x) = h5ConcreteBlobDims x
+
+newtype H5Datatype = H5Datatype {unDatatype :: Hid}
+
+eqDatatypeImpl :: H5Datatype -> H5Datatype -> Bool
+eqDatatypeImpl (H5Datatype h₁) (H5Datatype h₂) =
+  unsafePerformIO $
+    fmap (> 0) $ h5Check msg =<< h5t_equal h₁ h₂
+  where
+    msg = Just $ "h5t_equal failed"
+{-# NOINLINE eqDatatypeImpl #-}
+
+showDatatypeImpl :: H5Datatype -> String
+showDatatypeImpl (H5Datatype h) = unsafePerformIO $ do
+  alloca $ \sizePtr -> do
+    check =<< h5lt_dtype_to_text h nullPtr H5LT_DDL sizePtr
+    size <- peek sizePtr
+    allocaArray (fromIntegral size) $ \sPtr -> do
+      check =<< h5lt_dtype_to_text h sPtr H5LT_DDL sizePtr
+      peekCString sPtr
+  where
+    check c =
+      when (c < 0) . throw . H5Exception (fromIntegral c) [] . Just $
+        "failed to obtain textual representation of the datatype"
+
+instance Eq H5Datatype where
+  (==) = eqDatatypeImpl
+
+instance Show H5Datatype where
+  show = showDatatypeImpl
+
+newtype H5Dataset = H5Dataset {unDataset :: Hid}
+
+class (Typeable a, Storable a) => H5NativeDatatype a where
+  nativeType :: proxy a -> H5Datatype
+
+class (Typeable a, Storable a) => H5KnownDatatype a where
+  withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (H5Datatype -> m b) -> m b
+
+instance H5NativeDatatype Float where
+  nativeType _ = H5Datatype $ unsafePerformIO $ peek h5t_NATIVE_FLOAT
+
+instance H5NativeDatatype Double where
+  nativeType _ = H5Datatype $ unsafePerformIO $ peek h5t_NATIVE_DOUBLE
+
+instance H5KnownDatatype Float where withDatatype p f = f (nativeType p)
+
+instance H5KnownDatatype Double where withDatatype p f = f (nativeType p)
 
 toConcreteBlob :: Typeable a => H5Blob -> Maybe (H5ConcreteBlob a)
 toConcreteBlob (H5Blob x) = cast x
@@ -326,26 +376,90 @@ unsafeReadDataset ffiRead parent path dims = do
     read = ffiRead (unHandle parent) (toString path)
     msg = Just $ "error reading dataset " <> show path
 
-readDataset :: forall m. (MonadIO m, MonadThrow m) => H5Handle -> Text -> m H5Blob
+gReadDataset :: forall m. (MonadIO m, MonadMask m) => H5Handle -> Text -> m H5Blob
+gReadDataset parent path = do
+  (H5DatasetInfo dims _ _) <- h5GetDatasetInfo parent path
+  bracket (getDatatype parent path) closeDatatype $ \dtype ->
+    undefined
+
+readTypedDataset ::
+  forall a m proxy.
+  (H5KnownDatatype a, MonadIO m, MonadMask m) =>
+  proxy a ->
+  H5Handle ->
+  Text ->
+  m (H5ConcreteBlob a)
+readTypedDataset p parent path = do
+  (H5DatasetInfo dims _ _) <- h5GetDatasetInfo parent path
+  bracket (getDatatype parent path) closeDatatype $ \dtype ->
+    withDatatype p $ \dtype' -> do
+      when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
+        $! "dataset has wrong datatype: " <> show dtype <> "; expected " <> show dtype'
+      _unsafeReadDataset p parent path dims
+
+readDataset :: (MonadIO m, MonadMask m) => H5Handle -> Text -> m H5Blob
 readDataset parent path = do
-  (H5DatasetInfo dims typeClass typeSize) <- h5GetDatasetInfo parent path
-  let read ::
-        forall b a.
-        (Storable a, Storable b, Coercible a b) =>
-        (Hid -> String -> Ptr a -> IO Herr) ->
-        m (H5ConcreteBlob b)
-      read f = unsafeReadDataset f parent path dims
-      throwUnsupported =
-        throw . H5Exception (-1) [] . Just $
-          prettyName typeClass typeSize <> " is not (yet) supported"
-  case typeClass of
-    H5T_INTEGER -> case typeSize of
-      2 -> H5Blob <$> read @Int16 h5lt_read_dataset_short
-      4 -> H5Blob <$> read @Int32 h5lt_read_dataset_int
-      8 -> H5Blob <$> read @Int64 h5lt_read_dataset_long
-      _ -> throwUnsupported
-    H5T_FLOAT -> case typeSize of
-      4 -> H5Blob <$> read @Float h5lt_read_dataset_float
-      8 -> H5Blob <$> read @Double h5lt_read_dataset_double
-      _ -> throwUnsupported
-    _ -> throwUnsupported
+  (H5DatasetInfo dims _ _) <- h5GetDatasetInfo parent path
+  bracket (getDatatype parent path) closeDatatype $ \dtype ->
+    guessDatatype dtype $ \p -> H5Blob <$> _unsafeReadDataset p parent path dims
+
+_unsafeReadDataset ::
+  forall a m proxy.
+  (H5KnownDatatype a, MonadIO m, MonadMask m) =>
+  proxy a ->
+  H5Handle ->
+  Text ->
+  [Int] ->
+  m (H5ConcreteBlob a)
+_unsafeReadDataset p parent path dims = do
+  withDatatype p $ \dtype -> do
+    let read = h5lt_read_dataset (unHandle parent) (toString path) (unDatatype dtype) . castPtr
+        msg = Just $ "failed to read dataset " <> show path
+    v <- liftIO $ MV.unsafeNew (product dims)
+    void . h5Check msg =<< liftIO (MV.unsafeWith v read)
+    v' <- liftIO $ V.unsafeFreeze v
+    return $ H5ConcreteBlob v' dims
+
+guessDatatype ::
+  (MonadIO m, MonadThrow m) =>
+  H5Datatype ->
+  (forall a proxy. H5KnownDatatype a => proxy a -> m b) ->
+  m b
+guessDatatype dtype f
+  | dtype == nativeType (Proxy @Float) = f (Proxy @Float)
+  | dtype == nativeType (Proxy @Double) = f (Proxy @Double)
+  | otherwise = undefined
+
+makeDataset :: forall a m. (MonadIO m, MonadThrow m, H5KnownDatatype a) => H5Handle -> Text -> H5ConcreteBlob a -> m ()
+makeDataset parent path (H5ConcreteBlob v dims)
+  | product dims < V.length v = do
+    (void . h5Check msg =<<) $
+      liftIO $
+        withDatatype (Proxy @a) $ \dtype ->
+          withArrayLen (fromIntegral <$> dims) $ \rank dimsPtr ->
+            V.unsafeWith v $ \buffer ->
+              h5lt_make_dataset (unHandle parent) (toString path) rank dimsPtr (unDatatype dtype) (castPtr buffer)
+  | otherwise = error $ "product of dimensions " <> show dims <> " exceeds the size of vector " <> show (V.length v)
+  where
+    msg = Just $ "failed to create dataset " <> show path
+
+openDataset :: (MonadIO m, MonadThrow m) => H5Handle -> Text -> m H5Dataset
+openDataset parent path =
+  fmap H5Dataset . (h5Check msg =<<) . liftIO $
+    h5d_open (unHandle parent) (toString path) H5P_DEFAULT
+  where
+    msg = Just $ "failed to open dataset " <> show path
+
+closeDataset :: (MonadIO m, MonadThrow m) => H5Dataset -> m ()
+closeDataset = void . h5Check (Just "could not close dataset") <=< liftIO . h5d_close . unDataset
+
+withDataset :: (MonadIO m, MonadMask m) => H5Handle -> Text -> (H5Dataset -> m a) -> m a
+withDataset parent path = bracket (openDataset parent path) closeDataset
+
+closeDatatype :: (MonadIO m, MonadThrow m) => H5Datatype -> m ()
+closeDatatype = void . h5Check (Just "could not close datatype") <=< liftIO . h5t_close . unDatatype
+
+getDatatype :: (MonadIO m, MonadMask m) => H5Handle -> Text -> m H5Datatype
+getDatatype parent path =
+  fmap H5Datatype . withDataset parent path $
+    liftIO . h5d_get_type . unDataset >=> h5Check (Just "failed to get datatype of a dataset")
