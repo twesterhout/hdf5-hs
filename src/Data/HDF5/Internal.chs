@@ -5,10 +5,11 @@ module Data.HDF5.Internal where
 
 import Relude hiding (error)
 import Prelude (error)
-import Foreign.Ptr (Ptr)
+import Foreign.Ptr (Ptr, FunPtr, nullPtr, plusPtr, castFunPtr)
 import Foreign.Marshal.Alloc (allocaBytesAligned)
 import Foreign.Storable (Storable(..))
-import Foreign.C.Types (CChar, CInt)
+import Foreign.C.Types hiding (CSize)
+import Foreign.C.String (peekCString)
 
 #include <hdf5.h>
 #include <hdf5_hl.h>
@@ -63,6 +64,7 @@ instance Enum H5F_ACC where
 {#enum H5_iter_order_t {} #}
 {#enum H5_index_t {} #}
 {#enum H5T_class_t {} deriving(Eq, Show) #}
+{#enum H5E_direction_t {} #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -98,6 +100,66 @@ h5g_get_num_objs groupId =
 -- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
 {#fun H5Ldelete as h5l_delete { `Hid', `String', `H5P_DEFAULT' } -> `Herr' #}
 
+type H5E_walk2_t = CUInt -> Ptr ErrorInfo -> Ptr () -> IO Herr
+type H5E_auto2_t = Hid -> Ptr () -> IO Herr
+
+foreign import ccall "wrapper"
+  mkWalk :: H5E_walk2_t -> IO (FunPtr H5E_walk2_t)
+
+
+-- typedef struct H5E_error2_t {
+--     hid_t       cls_id;         /*class ID                           */
+--     hid_t       maj_num;	/*major error ID		     */
+--     hid_t       min_num;	/*minor error number		     */
+--     unsigned	line;		/*line in file where error occurs    */
+--     const char	*func_name;   	/*function in which error occurred   */
+--     const char	*file_name;	/*file in which error occurred       */
+--     const char	*desc;		/*optional supplied description      */
+-- } H5E_error2_t;
+data ErrorInfo = ErrorInfo
+  { errorInfoClass :: {-# UNPACK #-} !Hid,
+    errorInfoMajor :: {-# UNPACK #-} !Int,
+    errorInfoMinor :: {-# UNPACK #-} !Int,
+    errorInfoLine :: {-# UNPACK #-} !Int,
+    errorInfoFunc :: {-# UNPACK #-} !Text,
+    errorInfoFile :: {-# UNPACK #-} !Text,
+    errorInfoDesc :: {-# UNPACK #-} !(Maybe Text)
+  }
+  deriving stock (Show)
+
+instance Storable ErrorInfo where
+  sizeOf _ = {#sizeof H5E_error2_t#}
+  alignment _ = {#alignof H5E_error2_t#}
+  peek p = ErrorInfo <$> {#get H5E_error2_t->cls_id#} p
+                     <*> (fromIntegral <$> {#get H5E_error2_t->maj_num#} p)
+                     <*> (fromIntegral <$> {#get H5E_error2_t->min_num#} p)
+                     <*> (fromIntegral <$> {#get H5E_error2_t->line#} p)
+                     <*> (fmap toText $ peekCString =<< {#get H5E_error2_t->func_name#} p)
+                     <*> (fmap toText $ peekCString =<< {#get H5E_error2_t->file_name#} p)
+                     <*> (maybeDesc =<< {#get H5E_error2_t->desc#} p)
+   where maybeDesc !p'
+          | p' == nullPtr = return Nothing
+          | otherwise = Just . toText <$> peekCString p'
+  poke _ _ = undefined
+
+
+printError :: H5E_walk2_t
+printError n errInfo _ = do
+  s <- peekCString =<< {#get H5E_error2_t->func_name#} errInfo
+  print s
+  return $ 0
+
+-- hid_t H5Eget_current_stack(void)
+{#fun H5Eget_current_stack as h5e_get_current_stack { } -> `Hid' #}
+-- herr_t H5Eclose_stack(hid_t estack_id)
+{#fun H5Eclose_stack as h5e_close_stack { `Hid' } -> `Herr' #}
+-- herr_t H5Eprint2( hid_t estack_id, FILE * stream)
+{#fun H5Eprint2 as h5e_print { `Hid', `Ptr ()' } -> `Herr' #}
+-- herr_t H5Eprint2( hid_t estack_id, FILE * stream)
+{#fun H5Ewalk2 as h5e_walk { `Hid', `H5E_direction_t', castFunPtr `FunPtr H5E_walk2_t', `Ptr ()' } -> `Herr' #}
+-- herr_t H5Eset_auto2( hid_t estack_id, H5E_auto2_t func, void *client_data )
+{#fun H5Eset_auto2 as h5e_set_auto { `Hid', id `FunPtr H5E_auto2_t', `Ptr ()' } -> `Herr' #}
+
 -- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
 {#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
 -- herr_t H5LTget_dataset_ndims ( hid_t loc_id, const char *dset_name, int *rank )
@@ -105,4 +167,31 @@ h5g_get_num_objs groupId =
 -- herr_t H5LTget_dataset_info ( hid_t loc_id, const char *dset_name, hsize_t *dims, H5T_class_t *class_id, size_t *type_size )
 -- NOTE: underlying type of C enum is int, so we cheat a little
 {#fun H5LTget_dataset_info as h5lt_get_dataset_info { `Hid', `String', id `Ptr Hsize', id `Ptr CInt', id `Ptr CSize' } -> `Herr' #}
--- herr_t H5LTread_dataset ( hid_t loc_id, const char *dset_name, hid_t type_id, void *buffer )
+
+-- herr_t H5LTread_dataset_char ( hid_t loc_id, const char *dset_name, char *buffer )
+{#fun H5LTread_dataset_char as h5lt_read_dataset_char { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
+-- herr_t H5LTread_dataset_short ( hid_t loc_id, const char *dset_name, short *buffer )
+{#fun H5LTread_dataset_short as h5lt_read_dataset_short { `Hid', `String', id `Ptr CShort' } -> `Herr' #}
+-- herr_t H5LTread_dataset_float ( hid_t loc_id, const char *dset_name, float *buffer )
+{#fun H5LTread_dataset_float as h5lt_read_dataset_float { `Hid', `String', id `Ptr CFloat' } -> `Herr' #}
+-- herr_t H5LTread_dataset_double ( hid_t loc_id, const char *dset_name, double *buffer )
+{#fun H5LTread_dataset_double as h5lt_read_dataset_double { `Hid', `String', id `Ptr CDouble' } -> `Herr' #}
+-- herr_t H5LTread_dataset_int ( hid_t loc_id, const char *dset_name, int *buffer )
+{#fun H5LTread_dataset_int as h5lt_read_dataset_int { `Hid', `String', id `Ptr CInt' } -> `Herr' #}
+-- herr_t H5LTread_dataset_long ( hid_t loc_id, const char *dset_name, long *buffer )
+{#fun H5LTread_dataset_long as h5lt_read_dataset_long { `Hid', `String', id `Ptr CLong' } -> `Herr' #}
+-- herr_t H5LTread_dataset_string ( hid_t loc_id, const char *dset_name, char *buffer )
+{#fun H5LTread_dataset_string as h5lt_read_dataset_string { `Hid', `String', id `Ptr CChar' } -> `Herr' #}
+
+-- herr_t H5LTmake_dataset_char ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const char *buffer )
+{#fun H5LTmake_dataset_char as h5lt_make_dataset_char { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CChar' } -> `Herr' #}
+-- herr_t H5LTmake_dataset_short ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const short *buffer )
+{#fun H5LTmake_dataset_short as h5lt_make_dataset_short { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CShort' } -> `Herr' #}
+-- herr_t H5LTmake_dataset_int ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const int *buffer )
+{#fun H5LTmake_dataset_int as h5lt_make_dataset_int { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CInt' } -> `Herr' #}
+-- herr_t H5LTmake_dataset_long ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const long *buffer )
+{#fun H5LTmake_dataset_long as h5lt_make_dataset_long { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CLong' } -> `Herr' #}
+-- herr_t H5LTmake_dataset_float ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const float *buffer )
+{#fun H5LTmake_dataset_float as h5lt_make_dataset_float { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CFloat' } -> `Herr' #}
+-- herr_t H5LTmake_dataset_double ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const double*buffer )
+{#fun H5LTmake_dataset_double as h5lt_make_dataset_double { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CDouble' } -> `Herr' #}

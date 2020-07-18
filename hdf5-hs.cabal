@@ -64,6 +64,7 @@ common common-options
                        RankNTypes
                        GADTs
                        PatternSynonyms
+                       FlexibleContexts
 
 library
   import:              common-options
