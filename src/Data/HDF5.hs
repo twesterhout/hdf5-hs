@@ -9,12 +9,15 @@ module Data.HDF5
     byName,
     foldM,
     Object (..),
+    Blob (..),
+    Attr (..),
     Some (..),
     makeGroup,
     delete,
     readDataset,
     readDataset',
     makeDataset,
+    readAttribute',
     disableDiagOutput,
     H5Exception (..),
     -- toConcreteBlob,
@@ -298,7 +301,7 @@ readDataset dataset = do
   _withDatatype dataset $ \dtype ->
     guessDatatype dtype $ \p -> Some <$> readDataset' p dataset
 
-readDataset' :: forall a m proxy. (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Dataset -> m (Blob a)
+readDataset' :: (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Dataset -> m (Blob a)
 readDataset' proxy dataset =
   getDims dataset "." >>= \dims ->
     withDatatype proxy $ \dtype -> do
@@ -398,9 +401,48 @@ guessDatatype dtype f
 data Attr a where
   Attr :: KnownDatatype a => a -> Attr a
 
-newtype Attribute = Attribute Hid
+deriving stock instance Show a => Show (Attr a)
 
+newtype Attribute = Attribute {unAttribute :: Hid}
 
+openAttribute :: (MonadIO m, MonadThrow m) => Object t -> Text -> m Attribute
+openAttribute object name =
+  fmap Attribute . (h5Check msg =<<) . liftIO $
+    h5a_open (getRawHandle object) (toString name) H5P_DEFAULT
+  where
+    msg = Just $ "failed to open attribute " <> show name
+
+closeAttribute :: (MonadIO m, MonadThrow m) => Attribute -> m ()
+closeAttribute = void . h5Check (Just "error closing attribute") <=< liftIO . h5a_close . unAttribute
+
+withAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> (Attribute -> m a) -> m a
+withAttribute object name = bracket (openAttribute object name) closeAttribute
+
+_withAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> (Datatype -> m a) -> m a
+_withAttributeDatatype attr = bracket (acquire attr) close
+  where
+    acquire = fmap Datatype . h5Check msg <=< liftIO . h5a_get_type . unAttribute
+    msg = Just "failed to get attribute datatype"
+
+readAttribute' :: forall a m t proxy. (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Object t -> Text -> m (Attr a)
+readAttribute' proxy object name =
+  withAttribute object name $ \attr ->
+    withDatatype proxy $ \dtype -> do
+      checkDatatypes attr dtype
+      let read = h5lt_get_attribute (getRawHandle object) "." (toString name) (getRawHandle dtype) . castPtr
+      r <- liftIO $
+        alloca $ \ptr ->
+          read ptr >>= \c ->
+            if c < 0 then return $ Left c else Right <$> peek ptr
+      case r of
+        Left c -> h5Fail msg c
+        Right x -> return $ Attr x
+  where
+    msg = Just $ "failed to read attribute " <> show name
+    checkDatatypes attr dtype =
+      _withAttributeDatatype attr $ \dtype' ->
+        when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
+          $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
 
 -- readAttribute' :: forall a m proxy. (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Object t -> m (Blob a)
 -- readAttribute' proxy object =

@@ -189,6 +189,13 @@ printError n errInfo _ = do
 -- htri_t H5Tequal( hid_t dtype_id1, hid_t dtype_id2 )
 {#fun H5Tequal as h5t_equal { `Hid', `Hid' } -> `Htri' #}
 
+-- hid_t H5Aopen(hid_t obj_id, const char *attr_name, hid_t aapl_id)
+{#fun H5Aopen as h5a_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
+-- herr_t H5Aclose(hid_t attr_id)
+{#fun H5Aclose as h5a_close { `Hid' } -> `Herr' #}
+-- hid_t H5Aget_type(hid_t attr_id)
+{#fun H5Aget_type as h5a_get_type { `Hid' } -> `Hid' #}
+
 -- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
 {#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
 -- herr_t H5LTget_dataset_ndims ( hid_t loc_id, const char *dset_name, int *rank )
@@ -230,6 +237,9 @@ printError n errInfo _ = do
 -- {#fun H5LTmake_dataset_float as h5lt_make_dataset_float { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CFloat' } -> `Herr' #}
 -- herr_t H5LTmake_dataset_double ( hid_t loc_id, const char *dset_name, int rank, const hsize_t *dims, const double*buffer )
 -- {#fun H5LTmake_dataset_double as h5lt_make_dataset_double { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CDouble' } -> `Herr' #}
+
+-- herr_t H5LTget_attribute( hid_t loc_id, const char *obj_name, const char *attr_name,  hid_t mem_type_id, void *data )
+{#fun H5LTget_attribute as h5lt_get_attribute { `Hid', `String', `String', `Hid', `Ptr ()' } -> `Herr' #}
 
 foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_DOUBLE_g" h5t_NATIVE_DOUBLE :: Ptr Hid
