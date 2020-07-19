@@ -66,6 +66,7 @@ common common-options
                        PatternSynonyms
                        FlexibleContexts
                        FlexibleInstances
+                       DataKinds
 
 library
   import:              common-options
@@ -74,6 +75,7 @@ library
   build-depends:     , directory
                      , safe-exceptions
                      , vector
+                     , some
   exposed-modules:     Hdf5Hs
                      , Data.HDF5
                      , Data.HDF5.Internal

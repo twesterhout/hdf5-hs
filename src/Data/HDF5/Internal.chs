@@ -66,6 +66,7 @@ instance Enum H5F_ACC where
 {#enum H5T_class_t {} deriving(Eq, Show) #}
 {#enum H5E_direction_t {} #}
 {#enum H5LT_lang_t {} #}
+{#enum H5O_type_t {} #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -76,9 +77,24 @@ withEnum = fromIntegral . fromEnum
 {#fun H5Fcreate as h5f_create { `String', withEnum `H5F_ACC', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' #}
 -- herr_t H5Fclose( hid_t file_id )
 {#fun H5Fclose as h5f_close { `Hid' } -> `Herr' #}
+-- hid_t H5Oopen( hid_t loc_id, const char *name, hid_t lapl_id )
+{#fun H5Oopen as h5o_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
 -- hid_t H5Oopen_by_idx( hid_t loc_id, const char *group_name, H5_index_t index_type, H5_iter_order_t order, hsize_t n, hid_t lapl_id )
 {#fun H5Oopen_by_idx as h5o_open_by_idx { `Hid', `String', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' #}
 {#fun H5Oclose as h5o_close { `Hid' } -> `Herr' #}
+-- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info_t *oinfo, unsigned fields )
+{#fun H5Oget_info2 as h5o_get_info' { `Hid', `Ptr ()', `CUInt' } -> `Herr' #}
+
+h5o_get_type :: Hid -> IO (Either Herr H5O_type_t)
+h5o_get_type h =
+  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
+    status <- h5o_get_info' h ptr h5o_INFO_BASIC
+    if status < 0
+      then return . Left $ status
+      else Right . toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
+  where h5o_INFO_BASIC :: CUInt
+        h5o_INFO_BASIC = 1
+
 -- htri_t H5Iis_valid( hid_t obj_id )
 {#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Htri' #}
 {#fun H5Iget_name as h5i_get_name { `Hid', id `Ptr CChar', `Int' } -> `Int' #}
