@@ -1,7 +1,10 @@
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Data.HDF5
   ( withFile,
+    withRoot,
+    IOMode (..),
     getName,
     getSize,
     getDims,
@@ -31,8 +34,6 @@ where
 
 import Control.Exception.Safe hiding (handle)
 import Data.HDF5.Internal
--- import Data.Proxy
-
 import Data.Some
 import Data.Typeable (cast)
 import Data.Vector.Storable (Vector)
@@ -45,8 +46,10 @@ import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
 import Foreign.Ptr (Ptr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable (..))
 import qualified GHC.Show
+import qualified GHC.TypeLits
 import Relude hiding (find, group, withFile)
 import System.Directory (doesFileExist)
+import System.IO (IOMode (..))
 import System.IO.Unsafe (unsafePerformIO)
 
 --------------------------------------------------------------------------------
@@ -140,7 +143,7 @@ openFile path mode = do
 withFile :: (MonadIO m, MonadMask m) => FilePath -> IOMode -> (File -> m a) -> m a
 withFile path mode = bracket (openFile path mode) close
 
-withRoot :: (MonadIO m, MonadMask m) => File -> (Group -> m a) -> m a
+withRoot :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> (Group -> m a) -> m a
 withRoot file f = byName file "/" $ \case
   (Some group@(Group _)) -> f group
   _ -> error "unreachable"
@@ -164,6 +167,15 @@ type Group = Object 'GroupTy
 type Dataset = Object 'DatasetTy
 
 type Datatype = Object 'DatatypeTy
+
+type family FileOrGroup (t :: ObjectType) :: Constraint where
+  FileOrGroup FileTy = ()
+  FileOrGroup GroupTy = ()
+  FileOrGroup t =
+    GHC.TypeLits.TypeError
+      ( GHC.TypeLits.Text "Expected either a File or a Group, but got "
+          GHC.TypeLits.:<>: GHC.TypeLits.ShowType t
+      )
 
 getRawHandle :: Object t -> Hid
 getRawHandle (File h) = h
