@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Data.HDF5.Internal where
@@ -81,7 +82,20 @@ withEnum = fromIntegral . fromEnum
 -- hid_t H5Oopen_by_idx( hid_t loc_id, const char *group_name, H5_index_t index_type, H5_iter_order_t order, hsize_t n, hid_t lapl_id )
 {#fun H5Oopen_by_idx as h5o_open_by_idx { `Hid', `String', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' #}
 {#fun H5Oclose as h5o_close { `Hid' } -> `Herr' #}
--- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info_t *oinfo, unsigned fields )
+
+#if H5_VERS_MAJOR == 1 && (H5_VERS_MINOR < 10 || (H5_VERS_MINOR == 10 && H5_VERS_RELEASE <= 3))
+-- herr_t H5Oget_info ( hid_t loc_id, H5O_info_t *oinfo )
+{#fun H5Oget_info as h5o_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
+
+h5o_get_type :: Hid -> IO (Either Herr H5O_type_t)
+h5o_get_type h =
+  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
+    status <- h5o_get_info' h ptr
+    if status < 0
+      then return . Left $ status
+      else Right . toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
+#else
+-- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info2_t *oinfo, unsigned fields )
 {#fun H5Oget_info2 as h5o_get_info' { `Hid', `Ptr ()', `CUInt' } -> `Herr' #}
 
 h5o_get_type :: Hid -> IO (Either Herr H5O_type_t)
@@ -93,6 +107,8 @@ h5o_get_type h =
       else Right . toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
   where h5o_INFO_BASIC :: CUInt
         h5o_INFO_BASIC = 1
+#endif
+
 
 -- htri_t H5Iis_valid( hid_t obj_id )
 {#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Htri' #}
