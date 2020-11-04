@@ -1,0 +1,5 @@
+resolver: lts-16.17
+
+flags:
+  hdf5-hs:
+    in_singularity: true

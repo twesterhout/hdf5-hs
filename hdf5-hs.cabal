@@ -21,6 +21,10 @@ source-repository head
   type:                git
   location:            https://github.com/twesterhout/hdf5-hs.git
 
+flag in_singularity
+  description:         Building inside Alpine Linux Singularity container
+  default:             False
+
 common common-options
   build-depends:       base >= 4.12.0.0 && < 4.15
                      , relude
@@ -82,9 +86,16 @@ library
                      , Data.HDF5
                      , Data.HDF5.Internal
   -- On Debian after installing libhdf5-dev
-  include-dirs:        /usr/include/hdf5/serial
-  extra-libraries:     hdf5_serial
-                     , hdf5_serial_hl
+  if !flag(in_singularity)
+    include-dirs:      /usr/include/hdf5/serial
+    extra-libraries:   hdf5_serial_hl
+                     , hdf5_serial
+                     , z
+  if flag(in_singularity)
+    extra-libraries:   hdf5_hl
+                     , hdf5
+                     , z
+    ghc-options:       -fPIC
 
 executable hdf5-hs
   import:              common-options
@@ -94,6 +105,8 @@ executable hdf5-hs
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+  if flag(in_singularity)
+    ld-options:        -static
 
 test-suite hdf5-hs-test
   import:              common-options
