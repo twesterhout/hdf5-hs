@@ -1,8 +1,27 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
+-- |
+-- Copyright: (c) 2020 Tom Westerhout
+-- SPDX-License-Identifier: BSD-3-Clause
+-- Maintainer: Tom Westerhout <14264576+twesterhout@users.noreply.github.com>
+--
+-- [HDF5](https://www.hdfgroup.org/solutions/hdf5) is a file format commonly
+-- used for scientific data. It is especially great for storing large datasets
+-- with lots of arrays or other structured data. This package provides a
+-- high-level interface to [HDF5
+-- library](https://portal.hdfgroup.org/pages/viewpage.action?pageId=50073943)
+-- for Haskell programming language.
 module Data.HDF5
-  ( withFile,
+  ( -- * Quickstart
+
+    -- | It is suggested to use qualified imports with @hdf5-hs@ package
+    -- @
+    --     import qualified Data.HDF5 as H5
+    -- @
+
+    -- | Hello world!
+    withFile,
     withRoot,
     IOMode (..),
     getName,
@@ -280,7 +299,7 @@ makeGroup parent path = liftIO create >>= h5Check msg >>= \h -> close (Group h)
 --------------------------------------------------------------------------------
 
 data Blob a where
-  Blob :: KnownDatatype a => {-# UNPACK #-} !(Vector a) -> ![Int] -> Blob a
+  Blob :: KnownDatatype a => ![Int] -> {-# UNPACK #-} !(Vector a) -> Blob a
 
 deriving stock instance Show a => Show (Blob a)
 
@@ -322,7 +341,7 @@ readDataset' proxy dataset =
       v <- liftIO $ MV.unsafeNew (product dims)
       void . h5Check (Just "failed to read dataset") =<< liftIO (MV.unsafeWith v read)
       v' <- liftIO $ V.unsafeFreeze v
-      return $ Blob v' dims
+      return $ Blob dims v'
   where
     checkDatatypes dtype =
       _withDatatype dataset $ \dtype' ->
@@ -336,7 +355,7 @@ makeDataset ::
   Text ->
   Blob a ->
   m ()
-makeDataset parent path (Blob v dims)
+makeDataset parent path (Blob dims v )
   | product dims == V.length v = do
     (void . h5Check msg =<<) $
       liftIO $

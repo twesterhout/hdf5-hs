@@ -108,6 +108,18 @@ executable hdf5-hs
   if flag(in_singularity)
     ld-options:        -static
 
+executable example01
+  import:              common-options
+  hs-source-dirs:      example
+  main-is:             example01.hs 
+  build-depends:       hdf5-hs
+                     , text
+  ghc-options:         -threaded
+                       -rtsopts
+                       -with-rtsopts=-N
+  if flag(in_singularity)
+    ld-options:        -static
+
 test-suite hdf5-hs-test
   import:              common-options
   type:                exitcode-stdio-1.0
