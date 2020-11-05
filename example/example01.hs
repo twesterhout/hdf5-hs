@@ -10,8 +10,9 @@ main :: IO ()
 main = do
   H5.withFile "test.h5" WriteMode $ \handle -> do
     -- Create a dataset
-    H5.makeDataset handle "A" $ H5.Blob @Double [3, 3] $
-      [1.0, 2.0, 3.0, -2.0, 4.0, 5.0, -3.0, -5.0, 6.0]
+    H5.makeDataset handle "A" $
+      H5.Blob @Double [3, 3] $
+        [1.0, 2.0, 3.0, -2.0, 4.0, 5.0, -3.0, -5.0, 6.0]
     -- Create a group
     H5.makeGroup handle "g"
   H5.withFile "test.h5" ReadMode $ \handle -> do
