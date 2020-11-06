@@ -7,15 +7,26 @@ import System.IO (IOMode (..))
 main :: IO ()
 main = do
   -- disableDiagOutput
-  withFile "workspace_30.h5" ReadMode $ \handle ->
-    withRoot handle $ \handle' ->
-      byName handle' "/47" $ \(Some root@(Group _)) -> do
-        -- print =<< getSize handle
-        -- print =<< getSize root
-        -- print =<< getDims root "c"
-        () <- byName root "c" $ \(Some x@(Dataset _)) ->
-          print =<< readDataset' (Proxy @Double) x
-        print =<< readAttribute' (Proxy @Double) root "energy"
+  withFile "workspace_30.h5" ReadWriteMode $ \handle -> do
+    byName handle "/47" $ \(Some root) -> do
+      -- print =<< getSize handle
+      -- print =<< getSize root
+      -- print =<< getDims root "c"
+      -- () <- byName root "c" $ \(Some x@(Dataset _)) ->
+      --   print =<< readDataset' (Proxy @Double) x
+      writeAttribute root "random" (12.3 :: Float)
+      print =<< readAttribute @Double root "energy"
+      print =<< readAttribute @Float root "random"
+      writeAttribute root "random" (15.8 :: Float)
+      print =<< readAttribute @Float root "random"
+      return ()
+    return ()
+
+  putStrLn "Hello world!"
+
+-- case hasStorable (Proxy @Float) of
+--   Just _ -> print "cheers!"
+--   Nothing -> print "fuck!"
 
 -- print =<< readAttribute' (Proxy @Double) root "energy"
 

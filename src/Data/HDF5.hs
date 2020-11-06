@@ -47,8 +47,10 @@ module Data.HDF5
     -- * Attributes
 
     -- |
-    Attr (..),
-    readAttribute',
+    hasAttribute,
+    readAttribute,
+    writeAttribute,
+    deleteAttribute,
 
     -- * Objects
 
@@ -469,54 +471,59 @@ class KnownDatatype' a where
   h5Poke _ p = poke (castPtr p)
 
 instance KnownDatatype' Int where
-  withDatatype' p f = f (nativeType p)
+  withDatatype' _ = fromStaticPointer h5t_NATIVE_INT64
   hasStorable _ = Just Dict
 
 instance KnownDatatype' Float where
-  withDatatype' p f = f (nativeType p)
+  withDatatype' _ = fromStaticPointer h5t_NATIVE_FLOAT
   hasStorable _ = Just Dict
 
 instance KnownDatatype' Double where
-  withDatatype' p f = f (nativeType p)
+  withDatatype' _ = fromStaticPointer h5t_NATIVE_DOUBLE
   hasStorable _ = Just Dict
-
-class NativeDatatype a where
-  nativeType :: proxy a -> Datatype
 
 class KnownDatatype a where
   withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
 
-instance NativeDatatype Int where
-  nativeType _ = Datatype $ unsafePerformIO $! peek h5t_NATIVE_INT64
+fromStaticPointer :: MonadIO m => Ptr Hid -> (Datatype -> m b) -> m b
+fromStaticPointer p f = f . Datatype =<< liftIO (peek p)
 
-instance NativeDatatype Float where
-  nativeType _ = Datatype $ unsafePerformIO $! peek h5t_NATIVE_FLOAT
+-- instance KnownDatatype Float where withDatatype p f = f (nativeType p)
 
-instance NativeDatatype Double where
-  nativeType _ = Datatype $ unsafePerformIO $! peek h5t_NATIVE_DOUBLE
+-- instance KnownDatatype Double where withDatatype p f = f (nativeType p)
 
-instance KnownDatatype Float where withDatatype p f = f (nativeType p)
+-- guessDatatype ::
+--   (MonadIO m, MonadThrow m) =>
+--   Datatype ->
+--   (forall a proxy. KnownDatatype a => proxy a -> m b) ->
+--   m b
+-- guessDatatype dtype f
+--   | dtype == nativeType (Proxy @Float) = f (Proxy @Float)
+--   | dtype == nativeType (Proxy @Double) = f (Proxy @Double)
+--   | otherwise = undefined
 
-instance KnownDatatype Double where withDatatype p f = f (nativeType p)
+--------------------------------------------------------------------------------
+-- Dataspaces
+--------------------------------------------------------------------------------
 
-guessDatatype ::
-  (MonadIO m, MonadThrow m) =>
-  Datatype ->
-  (forall a proxy. KnownDatatype a => proxy a -> m b) ->
-  m b
-guessDatatype dtype f
-  | dtype == nativeType (Proxy @Float) = f (Proxy @Float)
-  | dtype == nativeType (Proxy @Double) = f (Proxy @Double)
-  | otherwise = undefined
+newtype Dataspace = Dataspace {unDataspace :: Hid}
+
+createDataspace :: (MonadIO m, MonadThrow m) => H5S_class_t -> m Dataspace
+createDataspace c = fmap Dataspace . (h5Check msg =<<) . liftIO $ h5s_create c
+  where
+    msg = Just "failed to create dataspace"
+
+closeDataspace :: (MonadIO m, MonadThrow m) => Dataspace -> m ()
+closeDataspace = void . (h5Check msg =<<) . liftIO . h5s_close . unDataspace
+  where
+    msg = Just "failed to close dataspace"
+
+withDataspace :: (MonadIO m, MonadMask m) => H5S_class_t -> (Dataspace -> m a) -> m a
+withDataspace c = bracket (createDataspace c) closeDataspace
 
 --------------------------------------------------------------------------------
 -- Attributes
 --------------------------------------------------------------------------------
-
-data Attr a where
-  Attr :: KnownDatatype a => a -> Attr a
-
-deriving stock instance Show a => Show (Attr a)
 
 newtype Attribute = Attribute {unAttribute :: Hid}
 
@@ -527,94 +534,83 @@ openAttribute object name =
   where
     msg = Just $ "failed to open attribute " <> show name
 
+createAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> Datatype -> m Attribute
+createAttribute object name dtype =
+  withDataspace H5S_SCALAR $ \dataspace ->
+    fmap Attribute . (h5Check msg =<<) . liftIO $
+      h5a_create2
+        (getRawHandle object)
+        (toString name)
+        (getRawHandle dtype)
+        (unDataspace dataspace)
+        H5P_DEFAULT
+        H5P_DEFAULT
+  where
+    msg = Just $ "failed to open attribute " <> show name
+
 closeAttribute :: (MonadIO m, MonadThrow m) => Attribute -> m ()
 closeAttribute = void . h5Check (Just "error closing attribute") <=< liftIO . h5a_close . unAttribute
 
 withAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> (Attribute -> m a) -> m a
 withAttribute object name = bracket (openAttribute object name) closeAttribute
 
-_withAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> (Datatype -> m a) -> m a
-_withAttributeDatatype attr = bracket (acquire attr) close
+withAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> (Datatype -> m a) -> m a
+withAttributeDatatype attr = bracket (acquire attr) close
   where
     acquire = fmap Datatype . h5Check msg <=< liftIO . h5a_get_type . unAttribute
     msg = Just "failed to get attribute datatype"
 
--- getAttribute' :: forall a m. (KnownDatatype a, MonadIO m, MonadMask m) => Object t -> Text -> m a
--- getAttribute' = undefined
+checkAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> Datatype -> m ()
+checkAttributeDatatype attr dtype =
+  withAttributeDatatype attr $ \dtype' ->
+    when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
+      $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
 
 hasAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m Bool
 hasAttribute object name =
   fmap (> 0) . (h5Check msg =<<) . liftIO $
     h5a_exists (getRawHandle object) (toString name)
   where
-    msg = Just $ "failed to determine whether attribute '" <> name <> "' exists"
+    msg = Just $ "failed to determine whether attribute " <> show name <> " exists"
 
-writeAttribute' :: forall a t m. (KnownDatatype a, MonadIO m, MonadMask m) => Object t -> Text -> a -> m ()
-writeAttribute' = undefined
-
-readStorableAttribute ::
-  forall a m.
-  (Storable a, KnownDatatype' a, MonadIO m, MonadMask m) =>
-  Attribute ->
-  Datatype ->
-  m (Either Herr a)
-readStorableAttribute attr dtype =
-  liftIO . alloca $ \ptr ->
-    h5a_read (unAttribute attr) (getRawHandle dtype) (castPtr ptr) >>= \c ->
-      if c < 0 then return $ Left c else Right <$> peek ptr
-
-readGeneralAttribute ::
-  forall a m.
-  (KnownDatatype' a, MonadIO m, MonadMask m) =>
-  Attribute ->
-  Datatype ->
-  m (Either Herr a)
-readGeneralAttribute attr dtype = do
-  n <- (h5Check msg =<<) . liftIO $ h5a_get_data_size (unAttribute attr)
-  liftIO . allocaBytes n $ \ptr ->
-    h5a_read (unAttribute attr) (getRawHandle dtype) ptr >>= \c ->
-      if c < 0 then return $ Left c else Right <$> h5Peek dtype ptr
+deleteAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m ()
+deleteAttribute object name =
+  void . (h5Check msg =<<) . liftIO $ h5a_delete (getRawHandle object) (toString name)
   where
-    msg = Just $ "failed to determine size of an attribute"
+    msg = Just $ "failed to delete attribute " <> show name
 
-readAttribute' :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> m a
-readAttribute' object name =
+writeAttribute :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> a -> m ()
+writeAttribute object name x = do
+  withDatatype' (Proxy @a) $ \dtype -> do
+    exists <- hasAttribute object name
+    let acquire = if exists then (openAttribute object name) else (createAttribute object name dtype)
+    bracket acquire closeAttribute $ \attr -> do
+      checkAttributeDatatype attr dtype
+      void . (h5Check msg =<<) . liftIO $
+        allocaForAttribute (Proxy @a) attr $ \ptr -> do
+          h5Poke dtype ptr x
+          h5a_write (unAttribute attr) (getRawHandle dtype) ptr
+  where
+    msg = Just $ "failed to set attribute " <> show name
+
+allocaForAttribute :: forall a proxy b. KnownDatatype' a => proxy a -> Attribute -> (Ptr () -> IO b) -> IO b
+allocaForAttribute proxy attr f = case hasStorable proxy of
+  Just Dict -> alloca @a $ f . castPtr
+  Nothing -> h5a_get_data_size (unAttribute attr) >>= h5Check msg >>= \n -> allocaBytes n f
+    where
+      msg = Just $ "failed to determine size of an attribute"
+
+readAttribute :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> m a
+readAttribute object name =
   withAttribute object name $ \attr ->
-    withDatatype' (Proxy @a) $ \dtype ->
-      checkDatatypes attr dtype >> read attr dtype >>= \case
+    withDatatype' (Proxy @a) $ \dtype -> do
+      checkAttributeDatatype attr dtype
+      r <- liftIO $
+        allocaForAttribute (Proxy @a) attr $ \ptr ->
+          h5a_read (unAttribute attr) (getRawHandle dtype) ptr >>= \c ->
+            if c < 0 then return $ Left c else Right <$> h5Peek dtype ptr
+      case r of
         Left c -> h5Fail msg c
         Right x -> return x
   where
-    checkDatatypes attr dtype =
-      _withAttributeDatatype attr $ \dtype' ->
-        when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
-          $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
-    read = case hasStorable (Proxy @a) of
-      Just Dict -> readStorableAttribute
-      Nothing -> readGeneralAttribute
     msg = Just $ "failed to read attribute " <> show name
-
---   where
---     msg = Just $ "failed to read attribute " <> show name
---     checkDatatypes attr dtype =
---       _withAttributeDatatype attr $ \dtype' ->
---         when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
---           $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
-
---   withAttribute object name $ \attr ->
---     withDatatype (Proxy @a) $ \dtype -> do
---       checkDatatypes attr dtype
---       let read = h5lt_get_attribute (getRawHandle object) "." (toString name) (getRawHandle dtype) . castPtr
---       r <- liftIO $
---         alloca $ \ptr ->
---           read ptr >>= \c ->
---             if c < 0 then return $ Left c else Right <$> peek ptr
---       case r of
---         Left c -> h5Fail msg c
---         Right x -> return x
---   where
---     msg = Just $ "failed to read attribute " <> show name
---     checkDatatypes attr dtype =
---       _withAttributeDatatype attr $ \dtype' ->
---         when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
---           $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
