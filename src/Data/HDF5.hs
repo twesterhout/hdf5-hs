@@ -13,45 +13,71 @@
 -- library](https://portal.hdfgroup.org/pages/viewpage.action?pageId=50073943)
 -- for Haskell programming language.
 module Data.HDF5
-  ( -- * Quickstart
+  ( -- * Working with files
 
     -- | It is suggested to use qualified imports with @hdf5-hs@ package
-    -- @
-    --     import qualified Data.HDF5 as H5
-    -- @
-
-    -- | Hello world!
+    --
+    -- > import qualified Data.HDF5 as H5
+    --
+    -- after which to open a hdf5 file for reading/writing you can use the
+    -- 'withFile' bracket:
+    --
+    -- > withFile "myImportantData.h5" ReadMode $ \file ->
+    -- >     ...
+    --
+    -- Note that 'ReadMode' comes from "System.IO" module. We use it here
+    -- instead of HDF5-specific modes to stress that HDF5 files are no different
+    -- from "normal" files.
     withFile,
-    withRoot,
-    IOMode (..),
-    getName,
-    getSize,
-    getDims,
-    byIndex,
-    byName,
-    foldM,
-    Object (..),
-    Blob (..),
-    Attr (..),
-    Some (..),
+
+    -- * Groups
+
+    -- |
     makeGroup,
-    delete,
+
+    -- * Datasets
+
+    -- |
+    Blob (..),
     readDataset,
     readDataset',
     makeDataset,
+    getDims,
+
+    -- * Attributes
+
+    -- |
+    Attr (..),
     readAttribute',
+
+    -- * Objects
+
+    -- |
+    Object (..),
+    -- File,
+    -- Group,
+    -- Dataset,
+    -- Datatype,
+    FileOrGroup,
+    delete,
+    getName,
+    getSize,
+    byIndex,
+    byName,
+    foldM,
     disableDiagOutput,
     H5Exception (..),
-    -- toConcreteBlob,
-    -- pattern H5Int16Blob,
-    -- pattern H5Int32Blob,
-    -- pattern H5Int64Blob,
-    -- pattern H5FloatBlob,
-    -- pattern H5DoubleBlob,
+
+    -- * Re-exports
+
+    -- | He-he-he
+    IOMode (..),
+    Some (..),
   )
 where
 
 import Control.Exception.Safe hiding (handle)
+import Data.Constraint (Dict (..))
 import Data.HDF5.Internal
 import Data.Some
 import Data.Typeable (cast)
@@ -70,6 +96,7 @@ import Relude hiding (find, group, withFile)
 import System.Directory (doesFileExist)
 import System.IO (IOMode (..))
 import System.IO.Unsafe (unsafePerformIO)
+import Unsafe.Coerce
 
 --------------------------------------------------------------------------------
 -- Error Handling
@@ -159,20 +186,34 @@ openFile path mode = do
   where
     fileNotFound = throw . H5Exception (-1) [] . Just $ "file " <> show path <> " not found"
 
-withFile :: (MonadIO m, MonadMask m) => FilePath -> IOMode -> (File -> m a) -> m a
+-- | Do some work with a file.
+withFile ::
+  (MonadIO m, MonadMask m) =>
+  -- | filename
+  FilePath ->
+  -- | mode in which to open the file
+  IOMode ->
+  -- | action to perform
+  (File -> m a) ->
+  m a
 withFile path mode = bracket (openFile path mode) close
 
-withRoot :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> (Group -> m a) -> m a
-withRoot file f = byName file "/" $ \case
-  (Some group@(Group _)) -> f group
-  _ -> error "unreachable"
+-- withRoot :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> (Group -> m a) -> m a
+-- withRoot file f = byName file "/" $ \case
+--   (Some group@(Group _)) -> f group
+--   _ -> error "unreachable"
 
 --------------------------------------------------------------------------------
 -- Objects
 --------------------------------------------------------------------------------
 
+-- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
+-- while keeping everything type-safe.
 data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
 
+-- | A HDF5 object.
+--
+-- Many operations in HDF5 library
 data Object (k :: ObjectType) where
   File :: Hid -> Object 'FileTy
   Group :: Hid -> Object 'GroupTy
@@ -187,6 +228,8 @@ type Dataset = Object 'DatasetTy
 
 type Datatype = Object 'DatatypeTy
 
+-- | A 'Constraint' to specify that the operation works for 'File' and 'Group',
+-- but not for other 'Object' types like 'Dataset' and 'Datatype'.
 type family FileOrGroup (t :: ObjectType) :: Constraint where
   FileOrGroup FileTy = ()
   FileOrGroup GroupTy = ()
@@ -260,18 +303,21 @@ openByName parent path = do
   where
     msg = Just $ "error opening object at path " <> show path
 
-byIndex :: (MonadIO m, MonadMask m) => Group -> Int -> (Some Object -> m a) -> m a
+byIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> (Some Object -> m a) -> m a
 byIndex g i = bracket (openByIndex g i) (\(Some x) -> close x)
 
 byName :: (MonadIO m, MonadMask m) => Object t -> Text -> (Some Object -> m a) -> m a
 byName object path = bracket (openByName object path) (\(Some x) -> close x)
 
-foldM :: (MonadIO m, MonadMask m) => (a -> Some Object -> m a) -> a -> Object t -> m a
-foldM !f !acc₀ = \case
-  x@(File _) -> withRoot x $ \g -> go g 0 acc₀
-  g@(Group _) -> go g 0 acc₀
-  _ -> error "Oops!"
+foldM :: forall a t m. (MonadIO m, MonadMask m, FileOrGroup t) => (a -> Some Object -> m a) -> a -> Object t -> m a
+foldM !f !acc₀ = \g -> go g 0 acc₀
   where
+    -- \case
+    --   g@(File _) -> withRoot x $ \g -> go g 0 acc₀
+    --   g@(Group _) -> go g 0 acc₀
+    --   _ -> error "Oops!"
+
+    go :: Object t -> Int -> a -> m a
     go !group !i !acc =
       getSize group >>= \n ->
         if i < n
@@ -299,7 +345,7 @@ makeGroup parent path = liftIO create >>= h5Check msg >>= \h -> close (Group h)
 --------------------------------------------------------------------------------
 
 data Blob a where
-  Blob :: KnownDatatype a => ![Int] -> {-# UNPACK #-} !(Vector a) -> Blob a
+  Blob :: (Storable a, KnownDatatype a) => ![Int] -> {-# UNPACK #-} !(Vector a) -> Blob a
 
 deriving stock instance Show a => Show (Blob a)
 
@@ -328,11 +374,14 @@ getDims parent path = do
     getInfo = h5lt_get_dataset_info (getRawHandle parent) (toString path)
 
 readDataset :: (MonadIO m, MonadMask m) => Dataset -> m (Some Blob)
-readDataset dataset = do
-  _withDatatype dataset $ \dtype ->
-    guessDatatype dtype $ \p -> Some <$> readDataset' p dataset
+readDataset dataset = undefined
 
-readDataset' :: (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Dataset -> m (Blob a)
+-- readDataset :: (MonadIO m, MonadMask m) => Dataset -> m (Some Blob)
+-- readDataset dataset = do
+--   _withDatatype dataset $ \dtype ->
+--     guessDatatype dtype $ \p -> Some <$> readDataset' p dataset
+
+readDataset' :: (Storable a, KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Dataset -> m (Blob a)
 readDataset' proxy dataset =
   getDims dataset "." >>= \dims ->
     withDatatype proxy $ \dtype -> do
@@ -350,12 +399,12 @@ readDataset' proxy dataset =
 
 makeDataset ::
   forall a m t.
-  (MonadIO m, MonadThrow m, KnownDatatype a) =>
+  (MonadIO m, MonadThrow m, Storable a, KnownDatatype a) =>
   Object t ->
   Text ->
   Blob a ->
   m ()
-makeDataset parent path (Blob dims v )
+makeDataset parent path (Blob dims v)
   | product dims == V.length v = do
     (void . h5Check msg =<<) $
       liftIO $
@@ -387,8 +436,7 @@ showDatatype !(Datatype h) =
   unsafePerformIO
     $! alloca
     $ \sizePtr -> do
-      void . h5Check msg =<< h5lt_dtype_to_text h nullPtr H5LT_DDL sizePtr
-      size <- peek sizePtr
+      size <- h5lt_dtype_to_text h nullPtr H5LT_DDL sizePtr >>= h5Check msg >> peek sizePtr
       allocaArray (fromIntegral size) $ \sPtr -> do
         h5lt_dtype_to_text h sPtr H5LT_DDL sizePtr >>= void . h5Check msg >> peekCString sPtr
   where
@@ -399,11 +447,47 @@ instance Eq Datatype where (==) = eqDatatype
 
 instance Show Datatype where show = showDatatype
 
-class (Typeable a, Storable a) => NativeDatatype a where
+-- | Specifies size of a 'Datatype'.
+--
+-- We want to support text attributes which usually have variable size. Hence,
+-- just adding 'Storable' constraint is not a solution.
+data DatatypeSize
+  = FixedSize {-# UNPACK #-} !Int
+  | VariableSize
+
+class KnownDatatype' a where
+  withDatatype' :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
+
+  hasStorable :: proxy a -> Maybe (Dict (Storable a))
+  hasStorable _ = Nothing
+
+  h5Peek :: Datatype -> Ptr () -> IO a
+  default h5Peek :: Storable a => Datatype -> Ptr () -> IO a
+  h5Peek _ = peek . castPtr
+  h5Poke :: Datatype -> Ptr () -> a -> IO ()
+  default h5Poke :: Storable a => Datatype -> Ptr () -> a -> IO ()
+  h5Poke _ p = poke (castPtr p)
+
+instance KnownDatatype' Int where
+  withDatatype' p f = f (nativeType p)
+  hasStorable _ = Just Dict
+
+instance KnownDatatype' Float where
+  withDatatype' p f = f (nativeType p)
+  hasStorable _ = Just Dict
+
+instance KnownDatatype' Double where
+  withDatatype' p f = f (nativeType p)
+  hasStorable _ = Just Dict
+
+class NativeDatatype a where
   nativeType :: proxy a -> Datatype
 
-class (Typeable a, Storable a) => KnownDatatype a where
+class KnownDatatype a where
   withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
+
+instance NativeDatatype Int where
+  nativeType _ = Datatype $ unsafePerformIO $! peek h5t_NATIVE_INT64
 
 instance NativeDatatype Float where
   nativeType _ = Datatype $ unsafePerformIO $! peek h5t_NATIVE_FLOAT
@@ -455,38 +539,82 @@ _withAttributeDatatype attr = bracket (acquire attr) close
     acquire = fmap Datatype . h5Check msg <=< liftIO . h5a_get_type . unAttribute
     msg = Just "failed to get attribute datatype"
 
-readAttribute' :: forall a m t proxy. (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Object t -> Text -> m (Attr a)
-readAttribute' proxy object name =
-  withAttribute object name $ \attr ->
-    withDatatype proxy $ \dtype -> do
-      checkDatatypes attr dtype
-      let read = h5lt_get_attribute (getRawHandle object) "." (toString name) (getRawHandle dtype) . castPtr
-      r <- liftIO $
-        alloca $ \ptr ->
-          read ptr >>= \c ->
-            if c < 0 then return $ Left c else Right <$> peek ptr
-      case r of
-        Left c -> h5Fail msg c
-        Right x -> return $ Attr x
+-- getAttribute' :: forall a m. (KnownDatatype a, MonadIO m, MonadMask m) => Object t -> Text -> m a
+-- getAttribute' = undefined
+
+hasAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m Bool
+hasAttribute object name =
+  fmap (> 0) . (h5Check msg =<<) . liftIO $
+    h5a_exists (getRawHandle object) (toString name)
   where
-    msg = Just $ "failed to read attribute " <> show name
+    msg = Just $ "failed to determine whether attribute '" <> name <> "' exists"
+
+writeAttribute' :: forall a t m. (KnownDatatype a, MonadIO m, MonadMask m) => Object t -> Text -> a -> m ()
+writeAttribute' = undefined
+
+readStorableAttribute ::
+  forall a m.
+  (Storable a, KnownDatatype' a, MonadIO m, MonadMask m) =>
+  Attribute ->
+  Datatype ->
+  m (Either Herr a)
+readStorableAttribute attr dtype =
+  liftIO . alloca $ \ptr ->
+    h5a_read (unAttribute attr) (getRawHandle dtype) (castPtr ptr) >>= \c ->
+      if c < 0 then return $ Left c else Right <$> peek ptr
+
+readGeneralAttribute ::
+  forall a m.
+  (KnownDatatype' a, MonadIO m, MonadMask m) =>
+  Attribute ->
+  Datatype ->
+  m (Either Herr a)
+readGeneralAttribute attr dtype = do
+  n <- (h5Check msg =<<) . liftIO $ h5a_get_data_size (unAttribute attr)
+  liftIO . allocaBytes n $ \ptr ->
+    h5a_read (unAttribute attr) (getRawHandle dtype) ptr >>= \c ->
+      if c < 0 then return $ Left c else Right <$> h5Peek dtype ptr
+  where
+    msg = Just $ "failed to determine size of an attribute"
+
+readAttribute' :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> m a
+readAttribute' object name =
+  withAttribute object name $ \attr ->
+    withDatatype' (Proxy @a) $ \dtype ->
+      checkDatatypes attr dtype >> read attr dtype >>= \case
+        Left c -> h5Fail msg c
+        Right x -> return x
+  where
     checkDatatypes attr dtype =
       _withAttributeDatatype attr $ \dtype' ->
         when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
           $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
+    read = case hasStorable (Proxy @a) of
+      Just Dict -> readStorableAttribute
+      Nothing -> readGeneralAttribute
+    msg = Just $ "failed to read attribute " <> show name
 
--- readAttribute' :: forall a m proxy. (KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Object t -> m (Blob a)
--- readAttribute' proxy object =
---   getDims dataset "." >>= \dims ->
---     withDatatype proxy $ \dtype -> do
---       checkDatatypes dtype
---       let read = h5lt_read_dataset (getRawHandle dataset) "." (getRawHandle dtype) . castPtr
---       v <- liftIO $ MV.unsafeNew (product dims)
---       void . h5Check (Just "failed to read dataset") =<< liftIO (MV.unsafeWith v read)
---       v' <- liftIO $ V.unsafeFreeze v
---       return $ Blob v' dims
 --   where
---     checkDatatypes dtype =
---       _withDatatype dataset $ \dtype' ->
+--     msg = Just $ "failed to read attribute " <> show name
+--     checkDatatypes attr dtype =
+--       _withAttributeDatatype attr $ \dtype' ->
 --         when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
---           $! "dataset has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
+--           $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
+
+--   withAttribute object name $ \attr ->
+--     withDatatype (Proxy @a) $ \dtype -> do
+--       checkDatatypes attr dtype
+--       let read = h5lt_get_attribute (getRawHandle object) "." (toString name) (getRawHandle dtype) . castPtr
+--       r <- liftIO $
+--         alloca $ \ptr ->
+--           read ptr >>= \c ->
+--             if c < 0 then return $ Left c else Right <$> peek ptr
+--       case r of
+--         Left c -> h5Fail msg c
+--         Right x -> return x
+--   where
+--     msg = Just $ "failed to read attribute " <> show name
+--     checkDatatypes attr dtype =
+--       _withAttributeDatatype attr $ \dtype' ->
+--         when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
+--           $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype

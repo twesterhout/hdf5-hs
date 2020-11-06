@@ -210,6 +210,22 @@ printError n errInfo _ = do
 {#fun H5Aclose as h5a_close { `Hid' } -> `Herr' #}
 -- hid_t H5Aget_type(hid_t attr_id)
 {#fun H5Aget_type as h5a_get_type { `Hid' } -> `Hid' #}
+-- htri_t H5Aexists(hid_t obj_id, const char *attr_name)
+{#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Htri' #}
+-- herr_t H5Aread(hid_t attr_id, hid_t mem_type_id, void *buf)
+{# fun H5Aread as h5a_read { `Hid', `Hid', `Ptr ()' } -> `Herr' #}
+
+-- herr_t H5Aget_info(hid_t attr_id, H5A_info_t *ainfo)
+{#fun H5Aget_info as h5a_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
+h5a_get_data_size :: Hid -> IO Int
+h5a_get_data_size attrId =
+  allocaBytesAligned {#sizeof H5A_info_t#} {#alignof H5A_info_t#} $ \ptr -> do
+    status <- h5a_get_info' attrId ptr
+    if status < 0
+      then return $ fromIntegral status
+      else do
+        (count :: {#type hsize_t#}) <- peekByteOff ptr {#offsetof H5A_info_t->data_size#} 
+        return $ fromIntegral count
 
 -- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
 {#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
@@ -256,5 +272,6 @@ printError n errInfo _ = do
 -- herr_t H5LTget_attribute( hid_t loc_id, const char *obj_name, const char *attr_name,  hid_t mem_type_id, void *data )
 {#fun H5LTget_attribute as h5lt_get_attribute { `Hid', `String', `String', `Hid', `Ptr ()' } -> `Herr' #}
 
+foreign import ccall unsafe "&H5T_NATIVE_INT64_g" h5t_NATIVE_INT64 :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_DOUBLE_g" h5t_NATIVE_DOUBLE :: Ptr Hid

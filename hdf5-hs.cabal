@@ -52,6 +52,7 @@ common common-options
   default-language:    Haskell2010
   default-extensions:  ConstraintKinds
                        DeriveGeneric
+                       DefaultSignatures
                        GeneralizedNewtypeDeriving
                        InstanceSigs
                        KindSignatures
@@ -82,6 +83,7 @@ library
                      , safe-exceptions
                      , vector
                      , some
+                     , constraints
   exposed-modules:     Hdf5Hs
                      , Data.HDF5
                      , Data.HDF5.Internal
