@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.Complex
 import Data.HDF5
 import Data.Proxy
 import System.IO (IOMode (..))
@@ -19,6 +20,8 @@ main = do
       print =<< readAttribute @Float root "random"
       writeAttribute root "random" (15.8 :: Float)
       print =<< readAttribute @Float root "random"
+      writeAttribute root "cheers" (17.0 :+ (-1.8) :: Complex Float)
+      print =<< readAttribute @(Complex Float) root "cheers"
       return ()
     return ()
 

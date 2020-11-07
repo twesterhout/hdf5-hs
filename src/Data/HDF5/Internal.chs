@@ -3,13 +3,15 @@
 
 module Data.HDF5.Internal where
 
+import Control.Exception.Safe hiding (handle)
+import Foreign.C.String (withCString, peekCString, CString)
+import Foreign.C.Types hiding (CSize)
+import Foreign.Marshal.Alloc (allocaBytesAligned)
+import Foreign.Ptr (FunPtr, Ptr, castFunPtr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr, plusPtr)
+import Foreign.Storable (Storable (..))
+import qualified GHC.Show
 import Relude hiding (error)
 import Prelude (error)
-import Foreign.Ptr (Ptr, FunPtr, nullPtr, plusPtr, castFunPtr)
-import Foreign.Marshal.Alloc (allocaBytesAligned)
-import Foreign.Storable (Storable(..))
-import Foreign.C.Types hiding (CSize)
-import Foreign.C.String (peekCString)
 
 #include <hdf5.h>
 #include <hdf5_hl.h>
@@ -72,66 +74,40 @@ instance Enum H5F_ACC where
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
 
--- hid_t H5Fopen( const char *name, unsigned flags, hid_t fapl_id )
-{#fun H5Fopen as h5f_open { `String', withEnum `H5F_ACC', `H5P_DEFAULT' } -> `Hid' #}
--- hid_t H5Fcreate( const char *name, unsigned flags, hid_t fcpl_id, hid_t fapl_id )
-{#fun H5Fcreate as h5f_create { `String', withEnum `H5F_ACC', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' #}
--- herr_t H5Fclose( hid_t file_id )
-{#fun H5Fclose as h5f_close { `Hid' } -> `Herr' #}
--- hid_t H5Oopen( hid_t loc_id, const char *name, hid_t lapl_id )
-{#fun H5Oopen as h5o_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
--- hid_t H5Oopen_by_idx( hid_t loc_id, const char *group_name, H5_index_t index_type, H5_iter_order_t order, hsize_t n, hid_t lapl_id )
-{#fun H5Oopen_by_idx as h5o_open_by_idx { `Hid', `String', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' #}
-{#fun H5Oclose as h5o_close { `Hid' } -> `Herr' #}
 
-#if H5_VERS_MAJOR == 1 && (H5_VERS_MINOR < 10 || (H5_VERS_MINOR == 10 && H5_VERS_RELEASE <= 3))
--- herr_t H5Oget_info ( hid_t loc_id, H5O_info_t *oinfo )
-{#fun H5Oget_info as h5o_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
+-- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
+-- while keeping everything type-safe.
+data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
 
-h5o_get_type :: Hid -> IO (Either Herr H5O_type_t)
-h5o_get_type h =
-  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
-    status <- h5o_get_info' h ptr
-    if status < 0
-      then return . Left $ status
-      else Right . toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
-#else
--- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info2_t *oinfo, unsigned fields )
-{#fun H5Oget_info2 as h5o_get_info' { `Hid', `Ptr ()', `CUInt' } -> `Herr' #}
+-- | A HDF5 object.
+--
+-- Many operations in HDF5 library
+data Object (k :: ObjectType) where
+  File :: Hid -> Object 'FileTy
+  Group :: Hid -> Object 'GroupTy
+  Dataset :: Hid -> Object 'DatasetTy
+  Datatype :: Hid -> Object 'DatatypeTy
 
-h5o_get_type :: Hid -> IO (Either Herr H5O_type_t)
-h5o_get_type h =
-  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
-    status <- h5o_get_info' h ptr h5o_INFO_BASIC
-    if status < 0
-      then return . Left $ status
-      else Right . toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
-  where h5o_INFO_BASIC :: CUInt
-        h5o_INFO_BASIC = 1
-#endif
+type File = Object 'FileTy
+
+type Group = Object 'GroupTy
+
+type Dataset = Object 'DatasetTy
+
+type Datatype = Object 'DatatypeTy
 
 
--- htri_t H5Iis_valid( hid_t obj_id )
-{#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Htri' #}
-{#fun H5Iget_name as h5i_get_name { `Hid', id `Ptr CChar', `Int' } -> `Int' #}
--- herr_t H5Gget_info( hid_t group_id, H5G_info_t *group_info )
-{#fun H5Gget_info as h5g_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
--- H5Gget_num_objs is deprecated in favour of H5Gget_info, so we use it to
--- obtain the number of objects within a group. Note that this function uses
--- error codes: negative return value indicates error.
-h5g_get_num_objs :: Hid -> IO Int
-h5g_get_num_objs groupId =
-  allocaBytesAligned {#sizeof H5G_info_t#} {#alignof H5G_info_t#} $ \ptr -> do
-    status <- h5g_get_info' groupId ptr
-    if status < 0
-      then return $ fromIntegral status
-      else do
-        count <- peekByteOff ptr {#offsetof H5G_info_t->nlinks#} :: IO {#type hsize_t#}
-        return $ fromIntegral count
--- hid_t H5Gcreate2( hid_t loc_id, const char *name, hid_t lcpl_id, hid_t gcpl_id, hid_t gapl_id )
-{#fun H5Gcreate2 as h5g_create { `Hid', `String', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' #}
--- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
-{#fun H5Ldelete as h5l_delete { `Hid', `String', `H5P_DEFAULT' } -> `Herr' #}
+class MkObject (t :: ObjectType) where
+  unsafeMkObject :: Hid -> Object t
+
+instance MkObject FileTy where unsafeMkObject = File
+instance MkObject GroupTy where unsafeMkObject = Group
+instance MkObject DatasetTy where unsafeMkObject = Dataset
+instance MkObject DatatypeTy where unsafeMkObject = Datatype
+
+--------------------------------------------------------------------------------
+-- Error Handling
+--------------------------------------------------------------------------------
 
 type H5E_walk2_t = CUInt -> Ptr ErrorInfo -> Ptr () -> IO Herr
 type H5E_auto2_t = Hid -> Ptr () -> IO Herr
@@ -139,15 +115,14 @@ type H5E_auto2_t = Hid -> Ptr () -> IO Herr
 foreign import ccall "wrapper"
   mkWalk :: H5E_walk2_t -> IO (FunPtr H5E_walk2_t)
 
-
 -- typedef struct H5E_error2_t {
---     hid_t       cls_id;         /*class ID                           */
---     hid_t       maj_num;	/*major error ID		     */
---     hid_t       min_num;	/*minor error number		     */
---     unsigned	line;		/*line in file where error occurs    */
---     const char	*func_name;   	/*function in which error occurred   */
---     const char	*file_name;	/*file in which error occurred       */
---     const char	*desc;		/*optional supplied description      */
+--     hid_t       cls_id;    /*class ID                           */
+--     hid_t       maj_num;   /*major error ID		     */
+--     hid_t       min_num;   /*minor error number		     */
+--     unsigned    line;      /*line in file where error occurs    */
+--     const char *func_name; /*function in which error occurred   */
+--     const char *file_name; /*file in which error occurred       */
+--     const char *desc;      /*optional supplied description      */
 -- } H5E_error2_t;
 data ErrorInfo = ErrorInfo
   { errorInfoClass :: {-# UNPACK #-} !Hid,
@@ -173,14 +148,7 @@ instance Storable ErrorInfo where
    where maybeDesc !p'
           | p' == nullPtr = return Nothing
           | otherwise = Just . toText <$> peekCString p'
-  poke _ _ = undefined
-
-
-printError :: H5E_walk2_t
-printError n errInfo _ = do
-  s <- peekCString =<< {#get H5E_error2_t->func_name#} errInfo
-  print s
-  return $ 0
+  poke _ _ = error "Storable.poke is undefined for ErrorInfo"
 
 -- hid_t H5Eget_current_stack(void)
 {#fun H5Eget_current_stack as h5e_get_current_stack { } -> `Hid' #}
@@ -193,13 +161,156 @@ printError n errInfo _ = do
 -- herr_t H5Eset_auto2( hid_t estack_id, H5E_auto2_t func, void *client_data )
 {#fun H5Eset_auto2 as h5e_set_auto { `Hid', id `FunPtr H5E_auto2_t', `Ptr ()' } -> `Herr' #}
 
--- hid_t H5Dget_type(hid_t dataset_id )
-{#fun H5Dget_type as h5d_get_type { `Hid' } -> `Hid' #}
--- hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
-{#fun H5Dopen2 as h5d_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
--- herr_t H5Dclose( hid_t dataset_id )
-{#fun H5Dclose as h5d_close { `Hid' } -> `Herr' #}
+data H5Exception = H5Exception !Hid ![ErrorInfo] !(Maybe Text)
+  deriving stock (Generic)
 
+instance Exception H5Exception
+
+instance Show H5Exception where
+  show = toString . prettyH5Exception
+
+prettyH5Exception :: H5Exception -> Text
+prettyH5Exception (H5Exception code stack msg) = "HDF5 error " <> show code <> msg' <> stack'
+  where
+    msg' = case msg of
+      Just s -> ": " <> s
+      Nothing -> ""
+    stack' = case (intersperse "\n  " $ prettyErrorInfo <$> stack) of
+      xs@(_ : _) -> mconcat $ "\n  " : xs
+      [] -> ""
+
+prettyErrorInfo :: ErrorInfo -> Text
+prettyErrorInfo info =
+  foldr (<>) "" $
+    [ errorInfoFile info,
+      ":",
+      show (errorInfoLine info),
+      ": in ",
+      errorInfoFunc info,
+      "()"
+    ]
+      ++ desc
+  where
+    desc = case errorInfoDesc info of
+      Just msg -> [": ", msg]
+      Nothing -> []
+
+collectStack :: MonadIO m => m [ErrorInfo]
+collectStack = liftIO . uninterruptibleMask_ $
+  bracket acquire release $ \stackId -> do
+    (listRef :: IORef [ErrorInfo]) <- newIORef []
+    let callback _ ptr _ = peek ptr >>= \info -> modifyIORef listRef ((:) info) >> return 0
+    bracket (mkWalk callback) freeHaskellFunPtr $ \fn -> do
+      status <- h5e_walk stackId H5E_WALK_UPWARD fn nullPtr
+      when (status < 0) . error $ "H5Ewalk2 failed with error code " <> show status
+    readIORef listRef
+  where
+    acquire = do
+      h <- h5e_get_current_stack
+      when (h < 0) . error $ "H5Eget_current_stack failed with error code " <> show h
+      return h
+    release h = do
+      status <- h5e_close_stack h
+      when (status < 0) . error $ "H5Eclose_stack failed with error code " <> show status
+
+disableDiagOutput :: MonadIO m => m ()
+disableDiagOutput = do
+  status <- liftIO $ h5e_set_auto {-H5E_DEFAULT-} 0 nullFunPtr nullPtr
+  when (status < 0) . error $ "H5Eset_auto2 failed with error code " <> show status
+
+h5Fail :: (Integral a, MonadIO m, MonadThrow m) => Maybe Text -> a -> m b
+h5Fail !msg !code = collectStack >>= \stack -> throw (H5Exception (fromIntegral code) stack msg)
+
+h5Check :: (Integral a, MonadIO m, MonadThrow m) => Maybe Text -> a -> m a
+h5Check msg !code = when (code < 0) (h5Fail msg code) >> return code
+
+liftCheck :: (Integral a, MonadIO m, MonadThrow m) => Text -> IO a -> m a
+liftCheck msg action = h5Check (Just msg) =<< liftIO action
+
+
+_checkError :: Integral a => a -> IO a
+_checkError code = when (code < 0) (h5Fail Nothing code) >> return code
+
+_createObject :: MkObject t => Hid -> IO (Object t)
+_createObject c = unsafeMkObject <$> _checkError c
+
+_toBool :: Htri -> IO Bool
+_toBool c = (> 0) <$> _checkError c
+
+withText :: Text -> (CString -> IO a) -> IO a
+withText text = withCString (toString text)
+
+-- hid_t H5Fopen( const char *name, unsigned flags, hid_t fapl_id )
+{#fun H5Fopen as h5f_open { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT' } -> `File' _createObject* #}
+-- hid_t H5Fcreate( const char *name, unsigned flags, hid_t fcpl_id, hid_t fapl_id )
+{#fun H5Fcreate as h5f_create
+  { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT', `H5P_DEFAULT' } -> `File' _createObject* #}
+-- herr_t H5Fclose( hid_t file_id )
+{#fun H5Fclose as h5f_close { `Hid' } -> `Herr' _checkError*- #}
+
+-- hid_t H5Oopen( hid_t loc_id, const char *name, hid_t lapl_id )
+{#fun H5Oopen as h5o_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+-- hid_t H5Oopen_by_idx( hid_t loc_id, const char *group_name, H5_index_t index_type, H5_iter_order_t order, hsize_t n, hid_t lapl_id )
+{#fun H5Oopen_by_idx as h5o_open_by_idx
+  { `Hid', withText* `Text', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+{#fun H5Oclose as h5o_close { `Hid' } -> `Herr' _checkError*- #}
+
+#if H5_VERS_MAJOR == 1 && (H5_VERS_MINOR < 10 || (H5_VERS_MINOR == 10 && H5_VERS_RELEASE <= 3))
+-- herr_t H5Oget_info ( hid_t loc_id, H5O_info_t *oinfo )
+{#fun H5Oget_info as h5o_get_info' { `Hid', `Ptr ()' } -> `()' _checkError*- #}
+
+h5o_get_type :: Hid -> IO H5O_type_t
+h5o_get_type h =
+  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
+    h5o_get_info' h ptr
+    toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
+#else
+-- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info2_t *oinfo, unsigned fields )
+{#fun H5Oget_info2 as h5o_get_info' { `Hid', `Ptr ()', `CUInt' } -> `()' _checkError*- #}
+
+h5o_get_type :: Hid -> IO H5O_type_t
+h5o_get_type h =
+  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
+    h5o_get_info' h ptr h5o_INFO_BASIC
+    toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
+  where h5o_INFO_BASIC :: CUInt
+        h5o_INFO_BASIC = 1
+#endif
+
+-- htri_t H5Iis_valid( hid_t obj_id )
+{#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Bool' _toBool* #}
+-- ssize_t H5Iget_name( hid_t obj_id, char *name, size_t size )
+{#fun H5Iget_name as h5i_get_name { `Hid', id `Ptr CChar', `Int' } -> `CLong' _checkError* #}
+
+-- herr_t H5Gget_info( hid_t group_id, H5G_info_t *group_info )
+{#fun H5Gget_info as h5g_get_info' { `Hid', `Ptr ()' } -> `Herr' _checkError*- #}
+-- H5Gget_num_objs is deprecated in favour of H5Gget_info, so we use it to
+-- obtain the number of objects within a group. Note that this function uses
+-- error codes: negative return value indicates error.
+h5g_get_num_objs :: Hid -> IO Int
+h5g_get_num_objs groupId =
+  allocaBytesAligned {#sizeof H5G_info_t#} {#alignof H5G_info_t#} $ \ptr -> do
+    h5g_get_info' groupId ptr
+    (count :: {#type hsize_t#}) <- peekByteOff ptr {#offsetof H5G_info_t->nlinks#}
+    return $ fromIntegral count
+-- hid_t H5Gcreate2( hid_t loc_id, const char *name, hid_t lcpl_id, hid_t gcpl_id, hid_t gapl_id )
+{#fun H5Gcreate2 as h5g_create
+  { `Hid', withText* `Text', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Group' _createObject* #}
+
+-- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
+{#fun H5Ldelete as h5l_delete { `Hid', withText* `Text', `H5P_DEFAULT' } -> `()' _checkError*- #}
+
+-- hid_t H5Dget_type(hid_t dataset_id )
+{#fun H5Dget_type as h5d_get_type { `Hid' } -> `Datatype' _createObject* #}
+-- hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
+-- {#fun H5Dopen2 as h5d_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Dataset' _createObject* #}
+-- herr_t H5Dclose( hid_t dataset_id )
+-- {#fun H5Dclose as h5d_close { `Hid' } -> `()' _checkError*- #}
+
+-- hid_t H5Tcreate( H5T_class_t class, size_t size )
+{#fun H5Tcreate as h5t_create { `H5T_class_t', `Int' } -> `Datatype' _createObject* #}
+-- herr_t H5Tinsert( hid_t dtype_id, const char * name, size_t offset, hid_t field_id )
+{#fun H5Tinsert as h5t_insert { `Hid', withText* `Text', `Int', `Hid' } -> `()' _checkError*- #}
 -- herr_t H5Tclose( hid_t dtype_id )
 {#fun H5Tclose as h5t_close { `Hid' } -> `Herr' #}
 -- htri_t H5Tequal( hid_t dtype_id1, hid_t dtype_id2 )
@@ -221,7 +332,8 @@ printError n errInfo _ = do
 -- hid_t H5Aget_type(hid_t attr_id)
 {#fun H5Aget_type as h5a_get_type { `Hid' } -> `Hid' #}
 -- htri_t H5Aexists(hid_t obj_id, const char *attr_name)
-{#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Htri' #}
+-- {#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Htri' #}
+{#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Bool' _toBool* #}
 -- herr_t H5Aread(hid_t attr_id, hid_t mem_type_id, void *buf)
 {# fun H5Aread as h5a_read { `Hid', `Hid', `Ptr ()' } -> `Herr' #}
 -- herr_t H5Awrite(hid_t attr_id, hid_t mem_type_id, const void *buf)

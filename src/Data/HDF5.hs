@@ -79,6 +79,7 @@ module Data.HDF5
 where
 
 import Control.Exception.Safe hiding (handle)
+import Data.Complex
 import Data.Constraint (Dict (..))
 import Data.HDF5.Internal
 import Data.Some
@@ -101,90 +102,20 @@ import System.IO.Unsafe (unsafePerformIO)
 import Unsafe.Coerce
 
 --------------------------------------------------------------------------------
--- Error Handling
---------------------------------------------------------------------------------
-
-data H5Exception = H5Exception !Hid ![ErrorInfo] !(Maybe Text)
-  deriving stock (Generic)
-
-instance Exception H5Exception
-
-instance Show H5Exception where
-  show = toString . prettyH5Exception
-
-prettyH5Exception :: H5Exception -> Text
-prettyH5Exception (H5Exception code stack msg) = "HDF5 error " <> show code <> msg' <> stack'
-  where
-    msg' = case msg of
-      Just s -> ": " <> s
-      Nothing -> ""
-    stack' = case (intersperse "\n  " $ prettyErrorInfo <$> stack) of
-      xs@(_ : _) -> mconcat $ "\n  " : xs
-      [] -> ""
-
-prettyErrorInfo :: ErrorInfo -> Text
-prettyErrorInfo info =
-  foldr (<>) "" $
-    [ errorInfoFile info,
-      ":",
-      show (errorInfoLine info),
-      ": in ",
-      errorInfoFunc info,
-      "()"
-    ]
-      ++ desc
-  where
-    desc = case errorInfoDesc info of
-      Just msg -> [": ", msg]
-      Nothing -> []
-
-collectStack :: MonadIO m => m [ErrorInfo]
-collectStack = liftIO . mask_ $
-  bracket acquire release $ \stackId -> do
-    (listRef :: IORef [ErrorInfo]) <- newIORef []
-    let callback _ ptr _ = peek ptr >>= \info -> modifyIORef listRef ((:) info) >> return 0
-    bracket (mkWalk callback) freeHaskellFunPtr $ \fn -> do
-      status <- h5e_walk stackId H5E_WALK_UPWARD fn nullPtr
-      when (status < 0) . error $ "H5Ewalk2 failed with error code " <> show status
-    readIORef listRef
-  where
-    acquire = mask_ $ do
-      h <- h5e_get_current_stack
-      when (h < 0) . error $ "H5Eget_current_stack failed with error code " <> show h
-      return h
-    release h = mask_ $ do
-      status <- h5e_close_stack h
-      when (status < 0) . error $ "H5Eclose_stack failed with error code " <> show status
-    foo = undefined
-
-disableDiagOutput :: MonadIO m => m ()
-disableDiagOutput = do
-  status <- liftIO $ h5e_set_auto {-H5E_DEFAULT-} 0 nullFunPtr nullPtr
-  when (status < 0) . error $ "H5Eset_auto2 failed with error code " <> show status
-
-h5Fail :: (Integral a, MonadIO m, MonadThrow m) => Maybe Text -> a -> m b
-h5Fail !msg !code = collectStack >>= \stack -> throw (H5Exception (fromIntegral code) stack msg)
-
-h5Check :: (Integral a, MonadIO m, MonadThrow m) => Maybe Text -> a -> m a
-h5Check msg !code = when (code < 0) (h5Fail msg code) >> return code
-
---------------------------------------------------------------------------------
 -- Files
 --------------------------------------------------------------------------------
 
-openFile :: (MonadIO m, MonadThrow m) => FilePath -> IOMode -> m File
-openFile path mode = do
-  r <-
-    liftIO $
-      doesFileExist path >>= \case
-        True -> case mode of
-          ReadMode -> h5f_open path H5F_ACC_RDONLY H5P_DEFAULT
-          WriteMode -> h5f_create path H5F_ACC_TRUNC H5P_DEFAULT H5P_DEFAULT
-          _ -> h5f_open path H5F_ACC_RDWR H5P_DEFAULT
-        False -> case mode of
-          ReadMode -> fileNotFound
-          _ -> h5f_create path H5F_ACC_EXCL H5P_DEFAULT H5P_DEFAULT
-  File <$> h5Check (Just $ "error opening file " <> show path) r
+openFile :: (MonadIO m, MonadThrow m) => Text -> IOMode -> m File
+openFile path mode =
+  liftIO $
+    doesFileExist (toString path) >>= \case
+      True -> case mode of
+        ReadMode -> h5f_open path H5F_ACC_RDONLY H5P_DEFAULT
+        WriteMode -> h5f_create path H5F_ACC_TRUNC H5P_DEFAULT H5P_DEFAULT
+        _ -> h5f_open path H5F_ACC_RDWR H5P_DEFAULT
+      False -> case mode of
+        ReadMode -> fileNotFound
+        _ -> h5f_create path H5F_ACC_EXCL H5P_DEFAULT H5P_DEFAULT
   where
     fileNotFound = throw . H5Exception (-1) [] . Just $ "file " <> show path <> " not found"
 
@@ -192,7 +123,7 @@ openFile path mode = do
 withFile ::
   (MonadIO m, MonadMask m) =>
   -- | filename
-  FilePath ->
+  Text ->
   -- | mode in which to open the file
   IOMode ->
   -- | action to perform
@@ -200,35 +131,9 @@ withFile ::
   m a
 withFile path mode = bracket (openFile path mode) close
 
--- withRoot :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> (Group -> m a) -> m a
--- withRoot file f = byName file "/" $ \case
---   (Some group@(Group _)) -> f group
---   _ -> error "unreachable"
-
 --------------------------------------------------------------------------------
 -- Objects
 --------------------------------------------------------------------------------
-
--- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
--- while keeping everything type-safe.
-data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
-
--- | A HDF5 object.
---
--- Many operations in HDF5 library
-data Object (k :: ObjectType) where
-  File :: Hid -> Object 'FileTy
-  Group :: Hid -> Object 'GroupTy
-  Dataset :: Hid -> Object 'DatasetTy
-  Datatype :: Hid -> Object 'DatatypeTy
-
-type File = Object 'FileTy
-
-type Group = Object 'GroupTy
-
-type Dataset = Object 'DatasetTy
-
-type Datatype = Object 'DatatypeTy
 
 -- | A 'Constraint' to specify that the operation works for 'File' and 'Group',
 -- but not for other 'Object' types like 'Dataset' and 'Datatype'.
@@ -247,41 +152,32 @@ getRawHandle (Group h) = h
 getRawHandle (Dataset h) = h
 getRawHandle (Datatype h) = h
 
-_getObjectType :: (MonadIO m, MonadThrow m) => Hid -> m H5O_type_t
-_getObjectType h =
-  liftIO (h5o_get_type h) >>= \case
-    Left code -> h5Fail (Just "error getting group size") code
-    Right t -> return t
+_getObjectType :: MonadIO m => Hid -> m H5O_type_t
+_getObjectType = liftIO . h5o_get_type
 
-closeObjectImpl :: (MonadIO m, MonadThrow m) => Hid -> m ()
-closeObjectImpl = void . h5Check (Just "error closing object") <=< liftIO . h5o_close
-
-closeFileImpl :: (MonadIO m, MonadThrow m) => Hid -> m ()
-closeFileImpl = void . h5Check (Just "error closing file") <=< liftIO . h5f_close
-
-close :: (MonadIO m, MonadThrow m) => Object t -> m ()
+close :: (MonadIO m) => Object t -> m ()
 close = \case
-  (File h) -> closeFileImpl $ h
-  object -> closeObjectImpl . getRawHandle $ object
+  (File h) -> liftIO . h5f_close $ h
+  object -> liftIO . h5o_close . getRawHandle $ object
 
 getSize :: (MonadIO m, MonadThrow m) => Object t -> m Int
 getSize = h5Check (Just "error getting group size") <=< liftIO . h5g_get_num_objs . getRawHandle
 
 getName :: (MonadIO m, MonadThrow m) => Object t -> m Text
-getName object = do
-  liftIO (h5i_get_name h nullPtr 0) >>= \r -> case compare r 0 of
-    GT -> fmap toText . liftIO $
-      allocaBytes (r + 1) $ \s ->
-        h5i_get_name h s (r + 1) >>= h5Check msg >> peekCString s
-    EQ -> return ""
-    LT -> throw $ H5Exception (fromIntegral r) [] msg
+getName object =
+  liftIO $
+    h5i_get_name h nullPtr 0 >>= \r ->
+      if r > 0
+        then fmap toText $
+          allocaBytes (fromIntegral r + 1) $ \s ->
+            h5i_get_name h s (fromIntegral r + 1) >> peekCString s
+        else return ""
   where
     !h = getRawHandle object
-    msg = Just "error getting object name"
 
 _constructObject :: (MonadIO m, MonadMask m) => Hid -> m (Some Object)
 _constructObject h =
-  flip onException (closeObjectImpl h) $
+  flip onException (liftIO $ h5o_close h) $
     _getObjectType h >>= \case
       H5O_TYPE_GROUP -> return . Some . Group $ h
       H5O_TYPE_DATASET -> return . Some . Dataset $ h
@@ -300,7 +196,7 @@ openByIndex parent i = do
 
 openByName :: (MonadIO m, MonadMask m) => Object t -> Text -> m (Some Object)
 openByName parent path = do
-  r <- (h5Check msg =<<) . liftIO $ h5o_open (getRawHandle parent) (toString path) H5P_DEFAULT
+  r <- (h5Check msg =<<) . liftIO $ h5o_open (getRawHandle parent) path H5P_DEFAULT
   _constructObject r
   where
     msg = Just $ "error opening object at path " <> show path
@@ -326,21 +222,17 @@ foldM !f !acc₀ = \g -> go g 0 acc₀
           then byIndex group i (f acc) >>= go group (i + 1)
           else return acc
 
-delete :: (MonadIO m, MonadThrow m) => Object t -> Text -> m ()
-delete parent path = void . h5Check msg =<< liftIO delete
-  where
-    delete = h5l_delete (getRawHandle parent) (toString path) H5P_DEFAULT
-    msg = Just $ "error deleting " <> show path
+delete :: MonadIO m => Object t -> Text -> m ()
+delete parent path = liftIO $ h5l_delete (getRawHandle parent) path H5P_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Groups
 --------------------------------------------------------------------------------
 
 makeGroup :: (MonadIO m, MonadThrow m) => Object t -> Text -> m ()
-makeGroup parent path = liftIO create >>= h5Check msg >>= \h -> close (Group h)
+makeGroup parent path = create >>= close
   where
-    create = h5g_create (getRawHandle parent) (toString path) H5P_DEFAULT H5P_DEFAULT H5P_DEFAULT
-    msg = Just $ "error creating group " <> show path
+    create = liftIO $ h5g_create (getRawHandle parent) path H5P_DEFAULT H5P_DEFAULT H5P_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Datasets
@@ -419,9 +311,7 @@ makeDataset parent path (Blob dims v)
     msg = Just $ "failed to create dataset " <> show path
 
 _withDatatype :: (MonadIO m, MonadMask m) => Dataset -> (Datatype -> m a) -> m a
-_withDatatype object = bracket (Datatype <$> acquire object) close
-  where
-    acquire = liftIO . h5d_get_type . getRawHandle >=> h5Check (Just "failed to get datatype of a dataset")
+_withDatatype object = bracket (liftIO . h5d_get_type . getRawHandle $ object) close
 
 --------------------------------------------------------------------------------
 -- Datatypes
@@ -449,6 +339,23 @@ instance Eq Datatype where (==) = eqDatatype
 
 instance Show Datatype where show = showDatatype
 
+withComplexDatatype ::
+  forall a m b proxy.
+  (MonadIO m, MonadMask m, Storable a, KnownDatatype' a) =>
+  proxy (Complex a) ->
+  (Datatype -> m b) ->
+  m b
+withComplexDatatype _ = bracket acquire close
+  where
+    acquire = withDatatype' (Proxy @a) $ \dtype -> do
+      object <- liftIO $ h5t_create H5T_COMPOUND (2 * size)
+      flip onException (close object) $
+        liftIO $ do
+          h5t_insert (getRawHandle object) "r" 0 (getRawHandle dtype)
+          h5t_insert (getRawHandle object) "i" size (getRawHandle dtype)
+      return object
+    size = sizeOf (undefined :: a)
+
 -- | Specifies size of a 'Datatype'.
 --
 -- We want to support text attributes which usually have variable size. Hence,
@@ -458,7 +365,7 @@ data DatatypeSize
   | VariableSize
 
 class KnownDatatype' a where
-  withDatatype' :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
+  withDatatype' :: (MonadIO m, MonadMask m) => proxy a -> (Datatype -> m b) -> m b
 
   hasStorable :: proxy a -> Maybe (Dict (Storable a))
   hasStorable _ = Nothing
@@ -480,6 +387,14 @@ instance KnownDatatype' Float where
 
 instance KnownDatatype' Double where
   withDatatype' _ = fromStaticPointer h5t_NATIVE_DOUBLE
+  hasStorable _ = Just Dict
+
+instance KnownDatatype' (Complex Float) where
+  withDatatype' = withComplexDatatype
+  hasStorable _ = Just Dict
+
+instance KnownDatatype' (Complex Double) where
+  withDatatype' = withComplexDatatype
   hasStorable _ = Just Dict
 
 class KnownDatatype a where
@@ -567,11 +482,7 @@ checkAttributeDatatype attr dtype =
       $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
 
 hasAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m Bool
-hasAttribute object name =
-  fmap (> 0) . (h5Check msg =<<) . liftIO $
-    h5a_exists (getRawHandle object) (toString name)
-  where
-    msg = Just $ "failed to determine whether attribute " <> show name <> " exists"
+hasAttribute object name = liftIO $ h5a_exists (getRawHandle object) (toString name)
 
 deleteAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m ()
 deleteAttribute object name =
