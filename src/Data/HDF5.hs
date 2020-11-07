@@ -318,9 +318,7 @@ _withDatatype object = bracket (liftIO . h5d_get_type . getRawHandle $ object) c
 --------------------------------------------------------------------------------
 
 eqDatatype :: Datatype -> Datatype -> Bool
-eqDatatype !(Datatype h₁) !(Datatype h₂) =
-  unsafePerformIO
-    $! fmap (> 0) . h5Check (Just "failed to compare datatypes") =<< h5t_equal h₁ h₂
+eqDatatype (Datatype h₁) (Datatype h₂) = unsafePerformIO $ h5t_equal h₁ h₂
 {-# NOINLINE eqDatatype #-}
 
 showDatatype :: Datatype -> String
@@ -423,18 +421,9 @@ fromStaticPointer p f = f . Datatype =<< liftIO (peek p)
 
 newtype Dataspace = Dataspace {unDataspace :: Hid}
 
-createDataspace :: (MonadIO m, MonadThrow m) => H5S_class_t -> m Dataspace
-createDataspace c = fmap Dataspace . (h5Check msg =<<) . liftIO $ h5s_create c
-  where
-    msg = Just "failed to create dataspace"
-
-closeDataspace :: (MonadIO m, MonadThrow m) => Dataspace -> m ()
-closeDataspace = void . (h5Check msg =<<) . liftIO . h5s_close . unDataspace
-  where
-    msg = Just "failed to close dataspace"
-
 withDataspace :: (MonadIO m, MonadMask m) => H5S_class_t -> (Dataspace -> m a) -> m a
-withDataspace c = bracket (createDataspace c) closeDataspace
+withDataspace c =
+  bracket (liftIO $ Dataspace <$> h5s_create c) (liftIO . h5s_close . unDataspace)
 
 --------------------------------------------------------------------------------
 -- Attributes
@@ -442,38 +431,27 @@ withDataspace c = bracket (createDataspace c) closeDataspace
 
 newtype Attribute = Attribute {unAttribute :: Hid}
 
-openAttribute :: (MonadIO m, MonadThrow m) => Object t -> Text -> m Attribute
-openAttribute object name =
-  fmap Attribute . (h5Check msg =<<) . liftIO $
-    h5a_open (getRawHandle object) (toString name) H5P_DEFAULT
-  where
-    msg = Just $ "failed to open attribute " <> show name
+openAttribute :: MonadIO m => Object t -> Text -> m Attribute
+openAttribute object name = liftIO $ Attribute <$> h5a_open (getRawHandle object) name H5P_DEFAULT
 
 createAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> Datatype -> m Attribute
 createAttribute object name dtype =
   withDataspace H5S_SCALAR $ \dataspace ->
-    fmap Attribute . (h5Check msg =<<) . liftIO $
-      h5a_create2
-        (getRawHandle object)
-        (toString name)
-        (getRawHandle dtype)
-        (unDataspace dataspace)
-        H5P_DEFAULT
-        H5P_DEFAULT
-  where
-    msg = Just $ "failed to open attribute " <> show name
-
-closeAttribute :: (MonadIO m, MonadThrow m) => Attribute -> m ()
-closeAttribute = void . h5Check (Just "error closing attribute") <=< liftIO . h5a_close . unAttribute
+    liftIO $
+      Attribute
+        <$> h5a_create2
+          (getRawHandle object)
+          name
+          (getRawHandle dtype)
+          (unDataspace dataspace)
+          H5P_DEFAULT
+          H5P_DEFAULT
 
 withAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> (Attribute -> m a) -> m a
-withAttribute object name = bracket (openAttribute object name) closeAttribute
+withAttribute object name = bracket (openAttribute object name) (liftIO . h5a_close . unAttribute)
 
 withAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> (Datatype -> m a) -> m a
-withAttributeDatatype attr = bracket (acquire attr) close
-  where
-    acquire = fmap Datatype . h5Check msg <=< liftIO . h5a_get_type . unAttribute
-    msg = Just "failed to get attribute datatype"
+withAttributeDatatype attr = bracket (liftIO . h5a_get_type . unAttribute $ attr) close
 
 checkAttributeDatatype :: (MonadIO m, MonadMask m) => Attribute -> Datatype -> m ()
 checkAttributeDatatype attr dtype =
@@ -481,28 +459,22 @@ checkAttributeDatatype attr dtype =
     when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
       $! "attribute has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
 
-hasAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m Bool
-hasAttribute object name = liftIO $ h5a_exists (getRawHandle object) (toString name)
+hasAttribute :: MonadIO m => Object t -> Text -> m Bool
+hasAttribute object name = liftIO $ h5a_exists (getRawHandle object) name
 
-deleteAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> m ()
-deleteAttribute object name =
-  void . (h5Check msg =<<) . liftIO $ h5a_delete (getRawHandle object) (toString name)
-  where
-    msg = Just $ "failed to delete attribute " <> show name
+deleteAttribute :: MonadIO m => Object t -> Text -> m ()
+deleteAttribute object name = liftIO $ h5a_delete (getRawHandle object) name
 
 writeAttribute :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> a -> m ()
 writeAttribute object name x = do
   withDatatype' (Proxy @a) $ \dtype -> do
     exists <- hasAttribute object name
     let acquire = if exists then (openAttribute object name) else (createAttribute object name dtype)
-    bracket acquire closeAttribute $ \attr -> do
+    bracket acquire (liftIO . h5a_close . unAttribute) $ \attr -> do
       checkAttributeDatatype attr dtype
-      void . (h5Check msg =<<) . liftIO $
-        allocaForAttribute (Proxy @a) attr $ \ptr -> do
-          h5Poke dtype ptr x
-          h5a_write (unAttribute attr) (getRawHandle dtype) ptr
-  where
-    msg = Just $ "failed to set attribute " <> show name
+      liftIO $
+        allocaForAttribute (Proxy @a) attr $ \ptr ->
+          h5Poke dtype ptr x >> h5a_write (unAttribute attr) (getRawHandle dtype) ptr
 
 allocaForAttribute :: forall a proxy b. KnownDatatype' a => proxy a -> Attribute -> (Ptr () -> IO b) -> IO b
 allocaForAttribute proxy attr f = case hasStorable proxy of
@@ -516,12 +488,6 @@ readAttribute object name =
   withAttribute object name $ \attr ->
     withDatatype' (Proxy @a) $ \dtype -> do
       checkAttributeDatatype attr dtype
-      r <- liftIO $
+      liftIO $
         allocaForAttribute (Proxy @a) attr $ \ptr ->
-          h5a_read (unAttribute attr) (getRawHandle dtype) ptr >>= \c ->
-            if c < 0 then return $ Left c else Right <$> h5Peek dtype ptr
-      case r of
-        Left c -> h5Fail msg c
-        Right x -> return x
-  where
-    msg = Just $ "failed to read attribute " <> show name
+          h5a_read (unAttribute attr) (getRawHandle dtype) ptr >> h5Peek dtype ptr

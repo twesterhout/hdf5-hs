@@ -312,32 +312,33 @@ h5g_get_num_objs groupId =
 -- herr_t H5Tinsert( hid_t dtype_id, const char * name, size_t offset, hid_t field_id )
 {#fun H5Tinsert as h5t_insert { `Hid', withText* `Text', `Int', `Hid' } -> `()' _checkError*- #}
 -- herr_t H5Tclose( hid_t dtype_id )
-{#fun H5Tclose as h5t_close { `Hid' } -> `Herr' #}
+-- {#fun H5Tclose as h5t_close { `Hid' } -> `()' _checkError*- #}
 -- htri_t H5Tequal( hid_t dtype_id1, hid_t dtype_id2 )
-{#fun H5Tequal as h5t_equal { `Hid', `Hid' } -> `Htri' #}
+{#fun H5Tequal as h5t_equal { `Hid', `Hid' } -> `Bool' _toBool* #}
 
 -- hid_t H5Screate(H5S_class_t type)
-{#fun H5Screate as h5s_create { `H5S_class_t' } -> `Hid' #}
+{#fun H5Screate as h5s_create { `H5S_class_t' } -> `Hid' _checkError* #}
 -- herr_t H5Sclose(hid_t space_id)
-{#fun H5Sclose as h5s_close { `Hid' } -> `Herr' #}
+{#fun H5Sclose as h5s_close { `Hid' } -> `()' _checkError*- #}
 
 -- hid_t H5Aopen(hid_t obj_id, const char *attr_name, hid_t aapl_id)
-{#fun H5Aopen as h5a_open { `Hid', `String', `H5P_DEFAULT' } -> `Hid' #}
+{#fun H5Aopen as h5a_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Hid' _checkError* #}
 -- herr_t H5Aclose(hid_t attr_id)
-{#fun H5Aclose as h5a_close { `Hid' } -> `Herr' #}
+{#fun H5Aclose as h5a_close { `Hid' } -> `()' _checkError*- #}
 -- hid_t H5Acreate2(hid_t loc_id, const char *attr_name, hid_t type_id, hid_t space_id, hid_t acpl_id, hid_t aapl_id)
-{#fun H5Acreate2 as h5a_create2 { `Hid', `String', `Hid', `Hid', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' #}
+{#fun H5Acreate2 as h5a_create2
+  { `Hid', withText* `Text', `Hid', `Hid', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' _checkError* #}
 -- herr_t H5Adelete(hid_t loc_id, const char *attr_name)
-{#fun H5Adelete as h5a_delete { `Hid', `String' } -> `Herr' #}
+{#fun H5Adelete as h5a_delete { `Hid', withText* `Text' } -> `()' _checkError*- #}
 -- hid_t H5Aget_type(hid_t attr_id)
-{#fun H5Aget_type as h5a_get_type { `Hid' } -> `Hid' #}
+{#fun H5Aget_type as h5a_get_type { `Hid' } -> `Datatype' _createObject* #}
 -- htri_t H5Aexists(hid_t obj_id, const char *attr_name)
 -- {#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Htri' #}
-{#fun H5Aexists as h5a_exists { `Hid', `String' } -> `Bool' _toBool* #}
+{#fun H5Aexists as h5a_exists { `Hid', withText* `Text' } -> `Bool' _toBool* #}
 -- herr_t H5Aread(hid_t attr_id, hid_t mem_type_id, void *buf)
-{# fun H5Aread as h5a_read { `Hid', `Hid', `Ptr ()' } -> `Herr' #}
+{# fun H5Aread as h5a_read { `Hid', `Hid', `Ptr ()' } -> `()' _checkError*- #}
 -- herr_t H5Awrite(hid_t attr_id, hid_t mem_type_id, const void *buf)
-{# fun H5Awrite as h5a_write { `Hid', `Hid', `Ptr ()' } -> `Herr' #}
+{# fun H5Awrite as h5a_write { `Hid', `Hid', `Ptr ()' } -> `()' _checkError*- #}
 -- herr_t H5Aget_info(hid_t attr_id, H5A_info_t *ainfo)
 {#fun H5Aget_info as h5a_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
 h5a_get_data_size :: Hid -> IO Int
