@@ -40,7 +40,7 @@ module Data.HDF5
     -- |
     Blob (..),
     readDataset,
-    makeDataset,
+    writeDataset,
     getDatasetDims,
 
     -- * Attributes
@@ -52,6 +52,7 @@ module Data.HDF5
     deleteAttribute,
 
     -- * Objects
+
     -- |
     Object (..),
     -- File,
@@ -238,13 +239,13 @@ exists parent path
   | otherwise = existsHelper parent (T.split (== '/') path)
   where
     existsHelper :: (MonadIO m, MonadMask m) => Object t -> [Text] -> m Bool
-    existsHelper parent [] = return True
-    existsHelper parent (first : rest) = do
-      linkExists parent first >>= \case
-        True -> parent `byName` first $ \(Some object) -> existsHelper object rest
+    existsHelper _ [] = return True
+    existsHelper p (first' : rest) = do
+      linkExists p first' >>= \case
+        True -> p `byName` first' $ \(Some object) -> existsHelper object rest
         False -> return False
     linkExists :: MonadIO m => Object t -> Text -> m Bool
-    linkExists parent name = liftIO $ h5l_exists (getRawHandle parent) name H5P_DEFAULT
+    linkExists p name = liftIO $ h5l_exists (getRawHandle p) name H5P_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Groups
@@ -260,36 +261,20 @@ makeGroup parent path = create >>= close
 --------------------------------------------------------------------------------
 
 data Blob a where
-  Blob :: (Storable a) => ![Int] -> {-# UNPACK #-} !(Vector a) -> Blob a
+  Blob :: (Storable a, KnownDatatype' a) => ![Int] -> {-# UNPACK #-} !(Vector a) -> Blob a
 
 deriving stock instance Show a => Show (Blob a)
 
 class (Storable b, KnownDatatype' b) => ToBlob a b | a -> b where
   toBlob :: a -> Blob b
 
--- _getNumDims :: (MonadIO m, MonadThrow m) => Object t -> Text -> m Int
--- _getNumDims parent path = fmap fromIntegral . liftIO . alloca $ \rankPtr ->
---   getNumDims rankPtr >>= h5Check msg >> peek rankPtr
---   where
---     getNumDims = h5lt_get_dataset_ndims (getRawHandle parent) (toString path)
---     msg = Just $ "failed to get number of dimensions of " <> show path
---
--- getDims :: (MonadIO m, MonadThrow m) => Object t -> Text -> m [Int]
--- getDims parent path = do
---   numDims <- _getNumDims parent path
---   r <- liftIO $
---     allocaArray numDims $ \dimsPtr ->
---       alloca $ \classIdPtr ->
---         alloca $ \typeSizePtr -> do
---           status <- getInfo dimsPtr classIdPtr typeSizePtr
---           if status < 0
---             then return . Left $ status
---             else Right <$> fmap fromIntegral <$> peekArray numDims dimsPtr
---   case r of
---     Left code -> h5Fail (Just "error getting dimensions") code
---     Right dims -> return dims
---   where
---     getInfo = h5lt_get_dataset_info (getRawHandle parent) (toString path)
+instance (Storable a, KnownDatatype' a) => ToBlob (Blob a) a where
+  toBlob = id
+
+instance (Storable a, KnownDatatype' a) => ToBlob [a] a where
+  toBlob xs = Blob [V.length v] v
+    where
+      v = V.fromList xs
 
 getDatasetDims :: MonadIO m => Dataset -> m [Int]
 getDatasetDims dataset =
@@ -306,6 +291,9 @@ checkDatasetDatatype dataset dtype =
     when (dtype /= dtype') . throw . H5Exception (-1) [] . Just
       $! "dataset has wrong datatype: " <> show dtype' <> "; expected " <> show dtype
 
+withDatasetDatatype :: (MonadIO m, MonadMask m) => Dataset -> (Datatype -> m a) -> m a
+withDatasetDatatype object = bracket (liftIO . h5d_get_type . getRawHandle $ object) close
+
 readDataset :: forall a m. (MonadIO m, MonadMask m, Storable a, KnownDatatype' a) => Dataset -> m (Blob a)
 readDataset dataset = do
   dims <- getDatasetDims dataset
@@ -318,46 +306,65 @@ readDataset dataset = do
       V.unsafeFreeze buffer
     return $ Blob dims v
 
--- readDataset :: (MonadIO m, MonadMask m) => Dataset -> m (Some Blob)
--- readDataset dataset = do
---   _withDatatype dataset $ \dtype ->
---     guessDatatype dtype $ \p -> Some <$> readDataset' p dataset
-
--- readDataset' :: (Storable a, KnownDatatype a, MonadIO m, MonadMask m) => proxy a -> Dataset -> m (Blob a)
--- readDataset' proxy dataset =
---   getDims dataset "." >>= \dims ->
---     withDatatype proxy $ \dtype -> do
---       checkDatasetDatatype dataset dtype
---       let read = h5lt_read_dataset (getRawHandle dataset) "." (getRawHandle dtype) . castPtr
---       v <- liftIO $ MV.unsafeNew (product dims)
---       void . h5Check (Just "failed to read dataset") =<< liftIO (MV.unsafeWith v read)
---       v' <- liftIO $ V.unsafeFreeze v
---       return $ Blob dims v'
-
-createDataset :: forall a t m. (MonadIO m, MonadMask m, Storable a, KnownDatatype' a) => Object t -> Text -> Blob a -> m Dataset
-createDataset object name (Blob dims v) = undefined
-
-makeDataset ::
-  forall a m t.
-  (MonadIO m, MonadThrow m, Storable a, KnownDatatype a) =>
+createDataset ::
+  forall a t m.
+  (MonadIO m, MonadMask m, KnownDatatype' a) =>
   Object t ->
   Text ->
   Blob a ->
-  m ()
-makeDataset parent path (Blob dims v)
-  | product dims == V.length v = do
-    (void . h5Check msg =<<) $
-      liftIO $
-        withDatatype (Proxy @a) $ \dtype ->
-          withArrayLen (fromIntegral <$> dims) $ \rank dimsPtr ->
-            V.unsafeWith v $ \buffer ->
-              h5lt_make_dataset (getRawHandle parent) (toString path) rank dimsPtr (getRawHandle dtype) (castPtr buffer)
-  | otherwise = error $ "product of dimensions " <> show dims <> " does not match the size of vector " <> show (V.length v)
-  where
-    msg = Just $ "failed to create dataset " <> show path
+  m Dataset
+createDataset object name (Blob dims _) =
+  withDatatype' (Proxy @a) $ \dtype ->
+    withDataspace H5S_SIMPLE $ \dataspace -> liftIO $ do
+      withArrayLen (fromIntegral <$> dims) $ \rank dimsPtr ->
+        h5s_set_extent_simple (unDataspace dataspace) rank dimsPtr dimsPtr
+      h5d_create2
+        (getRawHandle object)
+        name
+        (getRawHandle dtype)
+        (unDataspace dataspace)
+        H5P_DEFAULT
+        H5P_DEFAULT
+        H5P_DEFAULT
 
-withDatasetDatatype :: (MonadIO m, MonadMask m) => Dataset -> (Datatype -> m a) -> m a
-withDatasetDatatype object = bracket (liftIO . h5d_get_type . getRawHandle $ object) close
+withDataset ::
+  forall a t b m.
+  (MonadIO m, MonadMask m, KnownDatatype' a) =>
+  Object t ->
+  Text ->
+  Blob a ->
+  (Dataset -> m b) ->
+  m b
+withDataset object name blob f =
+  exists object name >>= \case
+    True -> object `byName` name $ \case
+      Some x@(Dataset _) -> f x
+      Some x -> do
+        t <- _getObjectType (getRawHandle x)
+        let msg =
+              "object "
+                <> show name
+                <> " has wrong type: "
+                <> show t
+                <> "; expected a "
+                <> show H5O_TYPE_DATASET
+        h5Fail (Just msg) (-1 :: Int)
+    False -> bracket (createDataset object name blob) close f
+
+writeDataset :: forall a b t m. (MonadIO m, MonadMask m, ToBlob b a) => Object t -> Text -> b -> m ()
+writeDataset object name tensor =
+  withDataset object name blob $ \dataset -> do
+    dims' <- getDatasetDims dataset
+    when (dims' /= dims) $
+      let msg = "dataset has wrong size: " <> show dims' <> "; expected " <> show dims
+       in h5Fail (Just msg) (-1 :: Int)
+    withDatatype' (Proxy @a) $ \dtype -> do
+      checkDatasetDatatype dataset dtype
+      liftIO $
+        V.unsafeWith v $ \ptr ->
+          h5d_write (getRawHandle dataset) (getRawHandle dtype) h5s_ALL h5s_ALL H5P_DEFAULT (castPtr ptr)
+  where
+    blob@(Blob dims v) = toBlob tensor
 
 --------------------------------------------------------------------------------
 -- Datatypes
@@ -448,8 +455,8 @@ instance KnownDatatype' Text where
   h5With x f = useAsCString (encodeUtf8 x) $ \p ->
     with p $ \p' -> f (castPtr p') 1
 
-class KnownDatatype a where
-  withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
+-- class KnownDatatype a where
+--   withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
 
 fromStaticPointer :: MonadIO m => Ptr Hid -> (Datatype -> m b) -> m b
 fromStaticPointer p f = f . Datatype =<< liftIO (peek p)
@@ -527,8 +534,8 @@ deleteAttribute object name = liftIO $ h5a_delete (getRawHandle object) name
 writeAttribute :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> a -> m ()
 writeAttribute object name x = do
   withDatatype' (Proxy @a) $ \dtype -> do
-    exists <- hasAttribute object name
-    let acquire = if exists then (openAttribute object name) else (createAttribute object name dtype)
+    exists' <- hasAttribute object name
+    let acquire = if exists' then (openAttribute object name) else (createAttribute object name dtype)
     bracket acquire (liftIO . h5a_close . unAttribute) $ \attr -> do
       checkAttributeDatatype attr dtype
       liftIO $ h5With x $ \ptr _ -> h5a_write (unAttribute attr) (getRawHandle dtype) ptr

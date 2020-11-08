@@ -80,7 +80,7 @@ instance Enum H5F_ACC where
 {#enum H5E_direction_t {} #}
 {#enum H5S_class_t {} #}
 {#enum H5LT_lang_t {} #}
-{#enum H5O_type_t {} #}
+{#enum H5O_type_t {} deriving(Show) #}
 
 withEnum :: (Enum a, Integral b) => a -> b
 withEnum = fromIntegral . fromEnum
@@ -321,9 +321,15 @@ h5g_get_num_objs groupId =
 -- {#fun H5Dopen2 as h5d_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Dataset' _createObject* #}
 -- herr_t H5Dclose( hid_t dataset_id )
 -- {#fun H5Dclose as h5d_close { `Hid' } -> `()' _checkError*- #}
--- herr_t H5Dread(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id, hid_t file_space_id, hid_t xfer_plist_id, void * buf)
+-- herr_t H5Dread(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id,
+--                hid_t file_space_id, hid_t xfer_plist_id, void * buf)
 {#fun H5Dread as h5d_read
   { `Hid', `Hid', `Hid', `Hid', `H5P_DEFAULT', `Ptr ()' } -> `()' _checkError*- #}
+-- herr_t H5Dwrite(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id,
+--                 hid_t file_space_id, hid_t xfer_plist_id, const void * buf)
+{#fun H5Dwrite as h5d_write
+  { `Hid', `Hid', `Hid', `Hid', `H5P_DEFAULT', `Ptr ()' } -> `()' _checkError*- #}
+
 -- hid_t H5Dget_space(hid_t dataset_id)
 {#fun H5Dget_space as h5d_get_space { `Hid' } -> `Hid' _checkError* #}
 -- hid_t H5Dcreate2(hid_t loc_id, const char *name, hid_t dtype_id, hid_t space_id, hid_t lcpl_id, hid_t dcpl_id, hid_t dapl_id)
@@ -380,6 +386,9 @@ instance Show Datatype where show = showDatatype
 {#fun H5Sget_simple_extent_ndims as h5s_get_simple_extent_ndims { `Hid' } -> `CInt' _checkError* #}
 -- int H5Sget_simple_extent_dims(hid_t space_id, hsize_t *dims, hsize_t *maxdims)
 {#fun H5Sget_simple_extent_dims as h5s_get_simple_extent_dims { `Hid', id `Ptr Hsize', id `Ptr Hsize' } -> `()' _checkError*- #}
+-- herr_t H5Sset_extent_simple(hid_t space_id, int rank, const hsize_t *current_size, const hsize_t *maximum_size)
+{#fun H5Sset_extent_simple as h5s_set_extent_simple
+  { `Hid', `Int', id `Ptr Hsize', id `Ptr Hsize' } -> `()' _checkError*- #}
 
 
 

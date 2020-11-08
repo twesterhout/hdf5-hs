@@ -36,7 +36,9 @@ main = do
         _ -> error "expected c to be a dataset"
 
       () <- byName root "c" $ \case
-        (Some x@(Dataset _)) -> print =<< readDataset @Double x
+        (Some x@(Dataset _)) -> do
+          blob <- readDataset @Double x
+          writeDataset root "p" blob
         _ -> error "expected c to be a dataset"
 
       return ()
