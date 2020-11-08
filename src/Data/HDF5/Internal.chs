@@ -4,13 +4,16 @@
 module Data.HDF5.Internal where
 
 import Control.Exception.Safe hiding (handle)
-import Foreign.C.String (withCString, peekCString, CString)
+import Data.ByteString (useAsCString)
+import Foreign.C.String (CString, peekCString)
 import Foreign.C.Types hiding (CSize)
-import Foreign.Marshal.Alloc (allocaBytesAligned)
-import Foreign.Ptr (FunPtr, Ptr, castFunPtr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr, plusPtr)
+import Foreign.Marshal.Alloc (alloca, allocaBytesAligned)
+import Foreign.Marshal.Array (allocaArray)
+import Foreign.Ptr (FunPtr, Ptr, castFunPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable (..))
 import qualified GHC.Show
 import Relude hiding (error)
+import System.IO.Unsafe (unsafePerformIO)
 import Prelude (error)
 
 #include <hdf5.h>
@@ -35,11 +38,14 @@ type CSize = {#type size_t#}
 data H5P_DEFAULT = H5P_DEFAULT
 
 instance Enum H5P_DEFAULT where
-  toEnum = undefined
+  toEnum = error "Enum.toEnum is not defined for H5P_DEFAULT"
   fromEnum H5P_DEFAULT = 0
 
 {#default in `H5P_DEFAULT' [hid_t] withEnum#}
 
+h5t_VARIABLE :: CSize
+-- #define H5T_VARIABLE    ((size_t)(-1))  /* Indicate that a string is variable length (null-terminated in C, instead of fixed length) */
+h5t_VARIABLE = maxBound
 
 data H5F_ACC
   = H5F_ACC_RDONLY
@@ -52,7 +58,7 @@ data H5F_ACC
   | H5F_ACC_SWMR_READ
 
 instance Enum H5F_ACC where
-  toEnum = undefined
+  toEnum = error "Enum.toEnum is not defined for H5F_ACC"
   fromEnum = \case
     H5F_ACC_RDONLY -> 0x0000
     H5F_ACC_RDWR -> 0x0001
@@ -66,6 +72,7 @@ instance Enum H5F_ACC where
 {#enum H5_iter_order_t {} #}
 {#enum H5_index_t {} #}
 {#enum H5T_class_t {} deriving(Eq, Show) #}
+{#enum H5T_cset_t {} #}
 {#enum H5E_direction_t {} #}
 {#enum H5S_class_t {} #}
 {#enum H5LT_lang_t {} #}
@@ -100,10 +107,10 @@ type Datatype = Object 'DatatypeTy
 class MkObject (t :: ObjectType) where
   unsafeMkObject :: Hid -> Object t
 
-instance MkObject FileTy where unsafeMkObject = File
-instance MkObject GroupTy where unsafeMkObject = Group
-instance MkObject DatasetTy where unsafeMkObject = Dataset
-instance MkObject DatatypeTy where unsafeMkObject = Datatype
+instance MkObject 'FileTy where unsafeMkObject = File
+instance MkObject 'GroupTy where unsafeMkObject = Group
+instance MkObject 'DatasetTy where unsafeMkObject = Dataset
+instance MkObject 'DatatypeTy where unsafeMkObject = Datatype
 
 --------------------------------------------------------------------------------
 -- Error Handling
@@ -238,7 +245,7 @@ _toBool :: Htri -> IO Bool
 _toBool c = (> 0) <$> _checkError c
 
 withText :: Text -> (CString -> IO a) -> IO a
-withText text = withCString (toString text)
+withText text = useAsCString (encodeUtf8 text)
 
 -- hid_t H5Fopen( const char *name, unsigned flags, hid_t fapl_id )
 {#fun H5Fopen as h5f_open { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT' } -> `File' _createObject* #}
@@ -311,10 +318,42 @@ h5g_get_num_objs groupId =
 {#fun H5Tcreate as h5t_create { `H5T_class_t', `Int' } -> `Datatype' _createObject* #}
 -- herr_t H5Tinsert( hid_t dtype_id, const char * name, size_t offset, hid_t field_id )
 {#fun H5Tinsert as h5t_insert { `Hid', withText* `Text', `Int', `Hid' } -> `()' _checkError*- #}
+-- hid_t H5Tcopy( hid_t dtype_id )
+{#fun H5Tcopy as h5t_copy { `Hid' } -> `Datatype' _createObject* #}
+-- herr_t H5Tset_cset( hid_t dtype_id, H5T_cset_t cset )
+{#fun H5Tset_cset as h5t_set_cset { `Hid', `H5T_cset_t' } -> `()' _checkError*- #}
+-- herr_t H5Tset_size( hid_t dtype_id, size_t size )
+{#fun H5Tset_size as h5t_set_size { `Hid', id `CSize' } -> `()' _checkError*- #}
+-- size_t H5Tget_size( hid_t dtype_id )
+{#fun H5Tget_size as h5t_get_size { `Hid' } -> `Int' _check* #}
+  where _check :: CSize -> IO Int
+        _check n
+          | n > 0 = return (fromIntegral n)
+          | otherwise = h5Fail (Just "failed to obtain datatype size") (-1 :: Int)
 -- herr_t H5Tclose( hid_t dtype_id )
 -- {#fun H5Tclose as h5t_close { `Hid' } -> `()' _checkError*- #}
 -- htri_t H5Tequal( hid_t dtype_id1, hid_t dtype_id2 )
 {#fun H5Tequal as h5t_equal { `Hid', `Hid' } -> `Bool' _toBool* #}
+
+eqDatatype :: Datatype -> Datatype -> Bool
+eqDatatype (Datatype h₁) (Datatype h₂) = unsafePerformIO $ h5t_equal h₁ h₂
+{-# NOINLINE eqDatatype #-}
+
+showDatatype :: Datatype -> String
+showDatatype !(Datatype h) =
+  unsafePerformIO
+    $! alloca
+    $ \sizePtr -> do
+      size <- h5lt_dtype_to_text h nullPtr H5LT_DDL sizePtr >>= h5Check msg >> peek sizePtr
+      allocaArray (fromIntegral size) $ \sPtr -> do
+        h5lt_dtype_to_text h sPtr H5LT_DDL sizePtr >>= void . h5Check msg >> peekCString sPtr
+  where
+    msg = Just $ "failed to obtain textual representation of the datatype"
+{-# NOINLINE showDatatype #-}
+
+instance Eq Datatype where (==) = eqDatatype
+
+instance Show Datatype where show = showDatatype
 
 -- hid_t H5Screate(H5S_class_t type)
 {#fun H5Screate as h5s_create { `H5S_class_t' } -> `Hid' _checkError* #}
@@ -340,16 +379,14 @@ h5g_get_num_objs groupId =
 -- herr_t H5Awrite(hid_t attr_id, hid_t mem_type_id, const void *buf)
 {# fun H5Awrite as h5a_write { `Hid', `Hid', `Ptr ()' } -> `()' _checkError*- #}
 -- herr_t H5Aget_info(hid_t attr_id, H5A_info_t *ainfo)
-{#fun H5Aget_info as h5a_get_info' { `Hid', `Ptr ()' } -> `Herr' #}
+{#fun H5Aget_info as h5a_get_info' { `Hid', `Ptr ()' } -> `()' _checkError*- #}
 h5a_get_data_size :: Hid -> IO Int
 h5a_get_data_size attrId =
   allocaBytesAligned {#sizeof H5A_info_t#} {#alignof H5A_info_t#} $ \ptr -> do
-    status <- h5a_get_info' attrId ptr
-    if status < 0
-      then return $ fromIntegral status
-      else do
-        (count :: {#type hsize_t#}) <- peekByteOff ptr {#offsetof H5A_info_t->data_size#} 
-        return $ fromIntegral count
+    h5a_get_info' attrId ptr
+    (count :: {#type hsize_t#}) <- peekByteOff ptr {#offsetof H5A_info_t->data_size#}
+    putStrLn $ "count = " <> show count
+    return $ fromIntegral count
 
 -- herr_t H5LTfind_dataset ( hid_t loc_id, const char *dset_name )
 {#fun H5LTfind_dataset as h5lt_find_dataset { `Hid', `String' } -> `Herr' #}
@@ -399,3 +436,4 @@ h5a_get_data_size attrId =
 foreign import ccall unsafe "&H5T_NATIVE_INT64_g" h5t_NATIVE_INT64 :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_DOUBLE_g" h5t_NATIVE_DOUBLE :: Ptr Hid
+foreign import ccall unsafe "&H5T_C_S1_g" h5t_C_S1 :: Ptr Hid

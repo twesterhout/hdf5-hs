@@ -79,33 +79,32 @@ module Data.HDF5
 where
 
 import Control.Exception.Safe hiding (handle)
+import Data.ByteString (packCString, useAsCString)
 import Data.Complex
 import Data.Constraint (Dict (..))
 import Data.HDF5.Internal
 import Data.Some
-import Data.Typeable (cast)
 import Data.Vector.Storable (Vector)
 import qualified Data.Vector.Storable as V
 import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (peekCString)
-import Foreign.C.Types
+import Foreign.C.Types (CChar)
 import Foreign.Marshal.Alloc (alloca, allocaBytes)
 import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
-import Foreign.Ptr (Ptr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
+import Foreign.Marshal.Utils (with)
+import Foreign.Ptr (Ptr, castPtr, nullPtr)
 import Foreign.Storable (Storable (..))
-import qualified GHC.Show
 import qualified GHC.TypeLits
 import Relude hiding (find, group, withFile)
 import System.Directory (doesFileExist)
-import System.IO (IOMode (..))
-import System.IO.Unsafe (unsafePerformIO)
-import Unsafe.Coerce
+
+-- import Unsafe.Coerce
 
 --------------------------------------------------------------------------------
 -- Files
 --------------------------------------------------------------------------------
 
-openFile :: (MonadIO m, MonadThrow m) => Text -> IOMode -> m File
+openFile :: MonadIO m => Text -> IOMode -> m File
 openFile path mode =
   liftIO $
     doesFileExist (toString path) >>= \case
@@ -138,12 +137,12 @@ withFile path mode = bracket (openFile path mode) close
 -- | A 'Constraint' to specify that the operation works for 'File' and 'Group',
 -- but not for other 'Object' types like 'Dataset' and 'Datatype'.
 type family FileOrGroup (t :: ObjectType) :: Constraint where
-  FileOrGroup FileTy = ()
-  FileOrGroup GroupTy = ()
+  FileOrGroup 'FileTy = ()
+  FileOrGroup 'GroupTy = ()
   FileOrGroup t =
     GHC.TypeLits.TypeError
-      ( GHC.TypeLits.Text "Expected either a File or a Group, but got "
-          GHC.TypeLits.:<>: GHC.TypeLits.ShowType t
+      ( 'GHC.TypeLits.Text "Expected either a File or a Group, but got "
+          'GHC.TypeLits.:<>: 'GHC.TypeLits.ShowType t
       )
 
 getRawHandle :: Object t -> Hid
@@ -163,7 +162,7 @@ close = \case
 getSize :: (MonadIO m, MonadThrow m) => Object t -> m Int
 getSize = h5Check (Just "error getting group size") <=< liftIO . h5g_get_num_objs . getRawHandle
 
-getName :: (MonadIO m, MonadThrow m) => Object t -> m Text
+getName :: MonadIO m => Object t -> m Text
 getName object =
   liftIO $
     h5i_get_name h nullPtr 0 >>= \r ->
@@ -229,7 +228,7 @@ delete parent path = liftIO $ h5l_delete (getRawHandle parent) path H5P_DEFAULT
 -- Groups
 --------------------------------------------------------------------------------
 
-makeGroup :: (MonadIO m, MonadThrow m) => Object t -> Text -> m ()
+makeGroup :: MonadIO m => Object t -> Text -> m ()
 makeGroup parent path = create >>= close
   where
     create = liftIO $ h5g_create (getRawHandle parent) path H5P_DEFAULT H5P_DEFAULT H5P_DEFAULT
@@ -317,26 +316,6 @@ _withDatatype object = bracket (liftIO . h5d_get_type . getRawHandle $ object) c
 -- Datatypes
 --------------------------------------------------------------------------------
 
-eqDatatype :: Datatype -> Datatype -> Bool
-eqDatatype (Datatype h₁) (Datatype h₂) = unsafePerformIO $ h5t_equal h₁ h₂
-{-# NOINLINE eqDatatype #-}
-
-showDatatype :: Datatype -> String
-showDatatype !(Datatype h) =
-  unsafePerformIO
-    $! alloca
-    $ \sizePtr -> do
-      size <- h5lt_dtype_to_text h nullPtr H5LT_DDL sizePtr >>= h5Check msg >> peek sizePtr
-      allocaArray (fromIntegral size) $ \sPtr -> do
-        h5lt_dtype_to_text h sPtr H5LT_DDL sizePtr >>= void . h5Check msg >> peekCString sPtr
-  where
-    msg = Just $ "failed to obtain textual representation of the datatype"
-{-# NOINLINE showDatatype #-}
-
-instance Eq Datatype where (==) = eqDatatype
-
-instance Show Datatype where show = showDatatype
-
 withComplexDatatype ::
   forall a m b proxy.
   (MonadIO m, MonadMask m, Storable a, KnownDatatype' a) =>
@@ -352,28 +331,41 @@ withComplexDatatype _ = bracket acquire close
           h5t_insert (getRawHandle object) "r" 0 (getRawHandle dtype)
           h5t_insert (getRawHandle object) "i" size (getRawHandle dtype)
       return object
-    size = sizeOf (undefined :: a)
+    size = sizeOf' (Proxy @a)
+
+withTextDatatype :: (MonadIO m, MonadMask m) => (Datatype -> m a) -> m a
+withTextDatatype = bracket (liftIO acquire) close
+  where
+    acquire = do
+      dtype <- h5t_copy =<< peek h5t_C_S1
+      flip onException (close dtype) $ do
+        h5t_set_cset (getRawHandle dtype) H5T_CSET_UTF8
+        h5t_set_size (getRawHandle dtype) h5t_VARIABLE
+      return dtype
 
 -- | Specifies size of a 'Datatype'.
 --
 -- We want to support text attributes which usually have variable size. Hence,
 -- just adding 'Storable' constraint is not a solution.
-data DatatypeSize
-  = FixedSize {-# UNPACK #-} !Int
-  | VariableSize
-
+-- data DatatypeSize
+--   = FixedSize {-# UNPACK #-} !Int
+--   | VariableSize
 class KnownDatatype' a where
   withDatatype' :: (MonadIO m, MonadMask m) => proxy a -> (Datatype -> m b) -> m b
 
   hasStorable :: proxy a -> Maybe (Dict (Storable a))
   hasStorable _ = Nothing
 
-  h5Peek :: Datatype -> Ptr () -> IO a
-  default h5Peek :: Storable a => Datatype -> Ptr () -> IO a
-  h5Peek _ = peek . castPtr
-  h5Poke :: Datatype -> Ptr () -> a -> IO ()
-  default h5Poke :: Storable a => Datatype -> Ptr () -> a -> IO ()
-  h5Poke _ p = poke (castPtr p)
+  h5Peek :: Ptr () -> Int -> IO a
+  default h5Peek :: Storable a => Ptr () -> Int -> IO a
+  h5Peek p n
+    | n == (sizeOf' (Proxy @a)) = peek $ castPtr p
+    | otherwise =
+      error $
+        "invalid buffer size: " <> show n <> "; expected " <> show (sizeOf' (Proxy @a))
+  h5With :: a -> (Ptr () -> Int -> IO b) -> IO b
+  default h5With :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
+  h5With x f = with x $ \buffer -> f (castPtr buffer) (sizeOf x)
 
 instance KnownDatatype' Int where
   withDatatype' _ = fromStaticPointer h5t_NATIVE_INT64
@@ -394,6 +386,20 @@ instance KnownDatatype' (Complex Float) where
 instance KnownDatatype' (Complex Double) where
   withDatatype' = withComplexDatatype
   hasStorable _ = Just Dict
+
+instance KnownDatatype' Text where
+  withDatatype' _ = withTextDatatype
+  h5Peek p n
+    | n == (sizeOf' (Proxy @(Ptr ()))) =
+      peek (castPtr p :: Ptr (Ptr CChar)) >>= \p' ->
+        decodeUtf8 <$> packCString p'
+    | otherwise =
+      error $
+        "expected a buffer of length "
+          <> show (sizeOf' (Proxy @(Ptr ())))
+          <> " for variable-length string"
+  h5With x f = useAsCString (encodeUtf8 x) $ \p ->
+    with p $ \p' -> f (castPtr p') 1
 
 class KnownDatatype a where
   withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
@@ -472,22 +478,28 @@ writeAttribute object name x = do
     let acquire = if exists then (openAttribute object name) else (createAttribute object name dtype)
     bracket acquire (liftIO . h5a_close . unAttribute) $ \attr -> do
       checkAttributeDatatype attr dtype
-      liftIO $
-        allocaForAttribute (Proxy @a) attr $ \ptr ->
-          h5Poke dtype ptr x >> h5a_write (unAttribute attr) (getRawHandle dtype) ptr
+      liftIO $ h5With x $ \ptr _ -> h5a_write (unAttribute attr) (getRawHandle dtype) ptr
 
-allocaForAttribute :: forall a proxy b. KnownDatatype' a => proxy a -> Attribute -> (Ptr () -> IO b) -> IO b
-allocaForAttribute proxy attr f = case hasStorable proxy of
-  Just Dict -> alloca @a $ f . castPtr
-  Nothing -> h5a_get_data_size (unAttribute attr) >>= h5Check msg >>= \n -> allocaBytes n f
-    where
-      msg = Just $ "failed to determine size of an attribute"
+allocaForDatatype :: forall a proxy b. KnownDatatype' a => proxy a -> Datatype -> (Ptr () -> Int -> IO b) -> IO b
+allocaForDatatype proxy dtype f = case hasStorable proxy of
+  Just Dict -> alloca $ \(ptr :: Ptr a) -> f (castPtr ptr) (sizeOf' (Proxy @a))
+  Nothing -> h5t_get_size (getRawHandle dtype) >>= \n -> allocaBytes n $ \ptr -> f ptr n
 
+-- allocaForAttribute :: forall a proxy b. KnownDatatype' a => proxy a -> Attribute -> (Ptr () -> Int -> IO b) -> IO b
+-- allocaForAttribute proxy attr f = case hasStorable proxy of
+--   Just Dict -> alloca @a $ \ptr -> f (castPtr ptr) (sizeOf (undefined :: a))
+--   Nothing -> withDatatype' (Proxy @a) $ \dtype ->
+--     h5t_get_size (getRawHandle dtype) >>= \n -> allocaBytes n $ \ptr -> f ptr n
+
+-- | Read an attribute
 readAttribute :: forall a t m. (KnownDatatype' a, MonadIO m, MonadMask m) => Object t -> Text -> m a
 readAttribute object name =
   withAttribute object name $ \attr ->
     withDatatype' (Proxy @a) $ \dtype -> do
       checkAttributeDatatype attr dtype
       liftIO $
-        allocaForAttribute (Proxy @a) attr $ \ptr ->
-          h5a_read (unAttribute attr) (getRawHandle dtype) ptr >> h5Peek dtype ptr
+        allocaForDatatype (Proxy @a) dtype $ \ptr n ->
+          h5a_read (unAttribute attr) (getRawHandle dtype) ptr >> h5Peek ptr n
+
+sizeOf' :: forall a proxy. Storable a => proxy a -> Int
+sizeOf' _ = sizeOf (undefined :: a)
