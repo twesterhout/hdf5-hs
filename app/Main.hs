@@ -3,6 +3,7 @@ module Main (main) where
 import Data.Complex
 import Data.HDF5
 import Data.Proxy
+import Data.Text
 import System.IO (IOMode (..))
 
 main :: IO ()
@@ -22,6 +23,22 @@ main = do
       print =<< readAttribute @Float root "random"
       writeAttribute root "cheers" (17.0 :+ (-1.8) :: Complex Float)
       print =<< readAttribute @(Complex Float) root "cheers"
+      writeAttribute @Text root "ping pong" "This is awesome!"
+      print =<< readAttribute @Text root "ping pong"
+
+      print =<< exists root "c'"
+      print =<< exists root "/48/tleft"
+
+      () <- byName root "c" $ \case
+        (Some x@(Dataset _)) -> do
+          print =<< getDatasetDims x
+          print =<< exists x "/47/tleft"
+        _ -> error "expected c to be a dataset"
+
+      () <- byName root "c" $ \case
+        (Some x@(Dataset _)) -> print =<< readDataset @Double x
+        _ -> error "expected c to be a dataset"
+
       return ()
     return ()
 

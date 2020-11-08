@@ -47,6 +47,10 @@ h5t_VARIABLE :: CSize
 -- #define H5T_VARIABLE    ((size_t)(-1))  /* Indicate that a string is variable length (null-terminated in C, instead of fixed length) */
 h5t_VARIABLE = maxBound
 
+h5s_ALL :: Hid
+-- #define H5S_ALL         (hid_t)0
+h5s_ALL = 0
+
 data H5F_ACC
   = H5F_ACC_RDONLY
   | H5F_ACC_RDWR
@@ -288,6 +292,8 @@ h5o_get_type h =
 {#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Bool' _toBool* #}
 -- ssize_t H5Iget_name( hid_t obj_id, char *name, size_t size )
 {#fun H5Iget_name as h5i_get_name { `Hid', id `Ptr CChar', `Int' } -> `CLong' _checkError* #}
+-- hid_t H5Iget_file_id( hid_t obj_id )
+{#fun H5Iget_file_id as h5i_get_file_id { `Hid' } -> `File' _createObject* #}
 
 -- herr_t H5Gget_info( hid_t group_id, H5G_info_t *group_info )
 {#fun H5Gget_info as h5g_get_info' { `Hid', `Ptr ()' } -> `Herr' _checkError*- #}
@@ -306,6 +312,8 @@ h5g_get_num_objs groupId =
 
 -- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
 {#fun H5Ldelete as h5l_delete { `Hid', withText* `Text', `H5P_DEFAULT' } -> `()' _checkError*- #}
+-- htri_t H5Lexists( hid_t loc_id, const char *name, hid_t lapl_id )
+{#fun H5Lexists as h5l_exists { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Bool' _toBool* #}
 
 -- hid_t H5Dget_type(hid_t dataset_id )
 {#fun H5Dget_type as h5d_get_type { `Hid' } -> `Datatype' _createObject* #}
@@ -313,6 +321,15 @@ h5g_get_num_objs groupId =
 -- {#fun H5Dopen2 as h5d_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Dataset' _createObject* #}
 -- herr_t H5Dclose( hid_t dataset_id )
 -- {#fun H5Dclose as h5d_close { `Hid' } -> `()' _checkError*- #}
+-- herr_t H5Dread(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id, hid_t file_space_id, hid_t xfer_plist_id, void * buf)
+{#fun H5Dread as h5d_read
+  { `Hid', `Hid', `Hid', `Hid', `H5P_DEFAULT', `Ptr ()' } -> `()' _checkError*- #}
+-- hid_t H5Dget_space(hid_t dataset_id)
+{#fun H5Dget_space as h5d_get_space { `Hid' } -> `Hid' _checkError* #}
+-- hid_t H5Dcreate2(hid_t loc_id, const char *name, hid_t dtype_id, hid_t space_id, hid_t lcpl_id, hid_t dcpl_id, hid_t dapl_id)
+{#fun H5Dcreate2 as h5d_create2
+  { `Hid', withText* `Text', `Hid', `Hid', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT'
+    } -> `Dataset' _createObject* #}
 
 -- hid_t H5Tcreate( H5T_class_t class, size_t size )
 {#fun H5Tcreate as h5t_create { `H5T_class_t', `Int' } -> `Datatype' _createObject* #}
@@ -359,6 +376,12 @@ instance Show Datatype where show = showDatatype
 {#fun H5Screate as h5s_create { `H5S_class_t' } -> `Hid' _checkError* #}
 -- herr_t H5Sclose(hid_t space_id)
 {#fun H5Sclose as h5s_close { `Hid' } -> `()' _checkError*- #}
+-- int H5Sget_simple_extent_ndims(hid_t space_id)
+{#fun H5Sget_simple_extent_ndims as h5s_get_simple_extent_ndims { `Hid' } -> `CInt' _checkError* #}
+-- int H5Sget_simple_extent_dims(hid_t space_id, hsize_t *dims, hsize_t *maxdims)
+{#fun H5Sget_simple_extent_dims as h5s_get_simple_extent_dims { `Hid', id `Ptr Hsize', id `Ptr Hsize' } -> `()' _checkError*- #}
+
+
 
 -- hid_t H5Aopen(hid_t obj_id, const char *attr_name, hid_t aapl_id)
 {#fun H5Aopen as h5a_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Hid' _checkError* #}
@@ -431,7 +454,7 @@ h5a_get_data_size attrId =
 -- {#fun H5LTmake_dataset_double as h5lt_make_dataset_double { `Hid', `String', `CInt', id `Ptr Hsize', id `Ptr CDouble' } -> `Herr' #}
 
 -- herr_t H5LTget_attribute( hid_t loc_id, const char *obj_name, const char *attr_name,  hid_t mem_type_id, void *data )
-{#fun H5LTget_attribute as h5lt_get_attribute { `Hid', `String', `String', `Hid', `Ptr ()' } -> `Herr' #}
+-- {#fun H5LTget_attribute as h5lt_get_attribute { `Hid', `String', `String', `Hid', `Ptr ()' } -> `Herr' #}
 
 foreign import ccall unsafe "&H5T_NATIVE_INT64_g" h5t_NATIVE_INT64 :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid

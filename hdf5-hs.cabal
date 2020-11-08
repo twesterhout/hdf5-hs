@@ -55,6 +55,7 @@ common common-options
                        DefaultSignatures
                        GeneralizedNewtypeDeriving
                        InstanceSigs
+                       FunctionalDependencies
                        KindSignatures
                        LambdaCase
                        OverloadedStrings
@@ -83,6 +84,7 @@ library
                      , safe-exceptions
                      , vector
                      , bytestring
+                     , text
                      , some
                      , constraints
   exposed-modules:     Hdf5Hs
