@@ -10,39 +10,37 @@ main :: IO ()
 main = do
   -- disableDiagOutput
   withFile "workspace_30.h5" ReadWriteMode $ \handle -> do
-    byName handle "/47" $ \(Some root) -> do
-      -- print =<< getSize handle
-      -- print =<< getSize root
-      -- print =<< getDims root "c"
-      -- () <- byName root "c" $ \(Some x@(Dataset _)) ->
-      --   print =<< readDataset' (Proxy @Double) x
-      writeAttribute root "random" (12.3 :: Float)
-      print =<< readAttribute @Double root "energy"
-      print =<< readAttribute @Float root "random"
-      writeAttribute root "random" (15.8 :: Float)
-      print =<< readAttribute @Float root "random"
-      writeAttribute root "cheers" (17.0 :+ (-1.8) :: Complex Float)
-      print =<< readAttribute @(Complex Float) root "cheers"
-      writeAttribute @Text root "ping pong" "This is awesome!"
-      print =<< readAttribute @Text root "ping pong"
+    byName handle "/47" . matchM @Group $ \root ->
+      do
+        -- print =<< getSize handle
+        -- print =<< getSize root
+        -- print =<< getDims root "c"
+        -- () <- byName root "c" $ \(Some x@(Dataset _)) ->
+        --   print =<< readDataset' (Proxy @Double) x
+        writeAttribute root "random" (12.3 :: Float)
+        print =<< readAttribute @Double root "energy"
+        print =<< readAttribute @Float root "random"
+        writeAttribute root "random" (15.8 :: Float)
+        print =<< readAttribute @Float root "random"
+        writeAttribute root "cheers" (17.0 :+ (-1.8) :: Complex Float)
+        print =<< readAttribute @(Complex Float) root "cheers"
+        writeAttribute @Text root "ping pong" "This is awesome!"
+        print =<< readAttribute @Text root "ping pong"
 
-      print =<< exists root "c'"
-      print =<< exists root "/48/tleft"
+        print =<< exists root "c'"
+        print =<< exists root "/48/tleft"
 
-      () <- byName root "c" $ \case
-        (Some x@(Dataset _)) -> do
-          print =<< getDatasetDims x
-          print =<< exists x "/47/tleft"
-        _ -> error "expected c to be a dataset"
+        () <- byName root "c" $ \case
+          (Some x@(Dataset _)) -> do
+            print =<< getDatasetDims x
+          _ -> error "expected c to be a dataset"
 
-      () <- byName root "c" $ \case
-        (Some x@(Dataset _)) -> do
-          blob <- readDataset @Double x
-          writeDataset root "p" blob
-        _ -> error "expected c to be a dataset"
-
-      return ()
-    return ()
+        () <- byName root "c" $ \case
+          (Some x@(Dataset _)) -> do
+            blob <- readDataset @Double x
+            writeDataset root "p" blob
+          _ -> error "expected c to be a dataset"
+        return ()
 
   putStrLn "Hello world!"
 

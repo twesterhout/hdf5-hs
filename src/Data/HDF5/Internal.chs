@@ -89,6 +89,7 @@ withEnum = fromIntegral . fromEnum
 -- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
 -- while keeping everything type-safe.
 data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
+  deriving stock (Show)
 
 -- | A HDF5 object.
 --

@@ -13,7 +13,7 @@
 -- library](https://portal.hdfgroup.org/pages/viewpage.action?pageId=50073943)
 -- for Haskell programming language.
 module Data.HDF5
-  ( -- * Working with files
+  ( -- * Files
 
     -- | It is suggested to use qualified imports with @hdf5-hs@ package
     --
@@ -32,8 +32,9 @@ module Data.HDF5
 
     -- * Groups
 
-    -- |
+    -- | There are very few group-specific operations since groups are just objects.
     makeGroup,
+    getSize,
 
     -- * Datasets
 
@@ -56,17 +57,17 @@ module Data.HDF5
     -- |
     Object (..),
     -- File,
-    -- Group,
-    -- Dataset,
+    Group (..),
+    Dataset (..),
     -- Datatype,
     FileOrGroup,
     exists,
     delete,
     getName,
-    getSize,
     byIndex,
     byName,
     foldM,
+    matchM,
     disableDiagOutput,
     H5Exception (..),
 
@@ -137,14 +138,33 @@ withFile path mode = bracket (openFile path mode) close
 
 -- | A 'Constraint' to specify that the operation works for 'File' and 'Group',
 -- but not for other 'Object' types like 'Dataset' and 'Datatype'.
-type family FileOrGroup (t :: ObjectType) :: Constraint where
-  FileOrGroup 'FileTy = ()
-  FileOrGroup 'GroupTy = ()
-  FileOrGroup t =
+-- type family FileOrGroup (t :: ObjectType) :: Constraint where
+--   FileOrGroup 'FileTy = ()
+--   FileOrGroup 'GroupTy = ()
+--   FileOrGroup t =
+--     GHC.TypeLits.TypeError
+--       ( 'GHC.TypeLits.Text "Expected either a File or a Group, but got "
+--           'GHC.TypeLits.:<>: 'GHC.TypeLits.ShowType t
+--       )
+type FileOrGroup (t :: ObjectType) = OneOf '[ 'FileTy, 'GroupTy] t
+
+type family ShowObjectType (t :: ObjectType) where
+  ShowObjectType 'FileTy = 'GHC.TypeLits.Text "File"
+  ShowObjectType 'GroupTy = 'GHC.TypeLits.Text "Group"
+  ShowObjectType 'DatasetTy = 'GHC.TypeLits.Text "Dataset"
+  ShowObjectType 'DatatypeTy = 'GHC.TypeLits.Text "Datatype"
+
+type family ErrorHelper (t :: ObjectType) :: Constraint where
+  ErrorHelper t =
     GHC.TypeLits.TypeError
-      ( 'GHC.TypeLits.Text "Expected either a File or a Group, but got "
-          'GHC.TypeLits.:<>: 'GHC.TypeLits.ShowType t
+      ( 'GHC.TypeLits.Text "Expected [...], but got "
+          'GHC.TypeLits.:<>: ShowObjectType t
       )
+
+type family OneOf (xs :: [ObjectType]) (x :: ObjectType) :: Constraint where
+  OneOf '[] x = ErrorHelper x
+  OneOf (x ': ys) x = ()
+  OneOf (y ': ys) x = OneOf ys x
 
 getRawHandle :: Object t -> Hid
 getRawHandle (File h) = h
@@ -155,13 +175,13 @@ getRawHandle (Datatype h) = h
 _getObjectType :: MonadIO m => Hid -> m H5O_type_t
 _getObjectType = liftIO . h5o_get_type
 
-close :: (MonadIO m) => Object t -> m ()
+close :: MonadIO m => Object t -> m ()
 close = \case
   (File h) -> liftIO . h5f_close $ h
   object -> liftIO . h5o_close . getRawHandle $ object
 
-getSize :: (MonadIO m, MonadThrow m) => Object t -> m Int
-getSize = h5Check (Just "error getting group size") <=< liftIO . h5g_get_num_objs . getRawHandle
+getSize :: (MonadIO m, FileOrGroup t) => Object t -> m Int
+getSize = liftIO . h5g_get_num_objs . getRawHandle
 
 getName :: MonadIO m => Object t -> m Text
 getName object =
@@ -175,6 +195,51 @@ getName object =
   where
     !h = getRawHandle object
 
+class MatchM t where
+  matchM' :: (HasCallStack, MonadThrow m) => Object t' -> m t
+
+instance MatchM File where
+  matchM' x@(File _) = return x
+  matchM' x = matchFail x
+
+instance MatchM Group where
+  matchM' x@(Group _) = return x
+  matchM' x = matchFail x
+
+instance MatchM Dataset where
+  matchM' x@(Dataset _) = return x
+  matchM' x = matchFail x
+
+instance MatchM Datatype where
+  matchM' x@(Datatype _) = return x
+  matchM' x = matchFail x
+
+matchM :: (HasCallStack, MatchM t, MonadThrow m) => (t -> m a) -> Some Object -> m a
+matchM f (Some object) = matchM' object >>= f
+
+class GetObjectType (t :: ObjectType) where
+  getObjectType :: proxy t -> ObjectType
+
+instance GetObjectType 'FileTy where getObjectType _ = FileTy
+
+instance GetObjectType 'GroupTy where getObjectType _ = GroupTy
+
+instance GetObjectType 'DatasetTy where getObjectType _ = DatasetTy
+
+instance GetObjectType 'DatatypeTy where getObjectType _ = DatatypeTy
+
+getObjectType' :: Object t -> ObjectType
+getObjectType' (File _) = FileTy
+getObjectType' (Group _) = GroupTy
+getObjectType' (Dataset _) = DatasetTy
+getObjectType' (Datatype _) = DatatypeTy
+
+matchFail :: forall t' t m. (HasCallStack, GetObjectType t, MonadThrow m) => Object t' -> m (Object t)
+matchFail x = error $ "wrong object type: " <> show t' <> "; expected " <> show t
+  where
+    t' = getObjectType' x
+    t = getObjectType (Proxy @t)
+
 _constructObject :: (MonadIO m, MonadMask m) => Hid -> m (Some Object)
 _constructObject h =
   flip onException (liftIO $ h5o_close h) $
@@ -182,13 +247,13 @@ _constructObject h =
       H5O_TYPE_GROUP -> return . Some . Group $ h
       H5O_TYPE_DATASET -> return . Some . Dataset $ h
       H5O_TYPE_NAMED_DATATYPE -> return . Some . Datatype $ h
-      _ -> throw . H5Exception (-1) [] . Just $ "unknown object type"
+      _ -> h5Fail (Just "unknown object type") (-1 :: Int)
 
-openByIndex :: (MonadIO m, MonadMask m) => Object t -> Int -> m (Some Object)
+openByIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> m (Some Object)
 openByIndex parent i = do
   n <- getSize parent
   when (i < 0 || i >= n) . error $ "invalid index: " <> show i
-  r <- (h5Check msg =<<) . liftIO $ h5o_open_by_idx h "." H5_INDEX_NAME H5_ITER_INC i H5P_DEFAULT
+  r <- liftIO $ h5o_open_by_idx h "." H5_INDEX_NAME H5_ITER_INC i H5P_DEFAULT
   _constructObject r
   where
     !h = getRawHandle parent
@@ -204,17 +269,12 @@ openByName parent path = do
 byIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> (Some Object -> m a) -> m a
 byIndex g i = bracket (openByIndex g i) (\(Some x) -> close x)
 
-byName :: (MonadIO m, MonadMask m) => Object t -> Text -> (Some Object -> m a) -> m a
+byName :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Text -> (Some Object -> m a) -> m a
 byName object path = bracket (openByName object path) (\(Some x) -> close x)
 
 foldM :: forall a t m. (MonadIO m, MonadMask m, FileOrGroup t) => (a -> Some Object -> m a) -> a -> Object t -> m a
 foldM !f !acc₀ = \g -> go g 0 acc₀
   where
-    -- \case
-    --   g@(File _) -> withRoot x $ \g -> go g 0 acc₀
-    --   g@(Group _) -> go g 0 acc₀
-    --   _ -> error "Oops!"
-
     go :: Object t -> Int -> a -> m a
     go !group !i !acc =
       getSize group >>= \n ->
@@ -232,17 +292,20 @@ withRoot x@(File _) func = x `byName` "/" $ \case
 withRoot x func = bracket (liftIO . h5i_get_file_id . getRawHandle $ x) close $ \f ->
   withRoot f func
 
-exists :: (MonadIO m, MonadMask m) => Object t -> Text -> m Bool
+exists :: (FileOrGroup t, MonadIO m, MonadMask m) => Object t -> Text -> m Bool
 exists parent path
   | T.null path = return True
   | T.head path == '/' = withRoot parent $ \g -> exists g (T.tail path)
   | otherwise = existsHelper parent (T.split (== '/') path)
   where
-    existsHelper :: (MonadIO m, MonadMask m) => Object t -> [Text] -> m Bool
+    existsHelper :: (FileOrGroup t, MonadIO m, MonadMask m) => Object t -> [Text] -> m Bool
     existsHelper _ [] = return True
     existsHelper p (first' : rest) = do
       linkExists p first' >>= \case
-        True -> p `byName` first' $ \(Some object) -> existsHelper object rest
+        True -> p `byName` first' $ \(Some object) ->
+          case object of
+            x@(Group _) -> existsHelper x rest
+            _ -> return (null rest)
         False -> return False
     linkExists :: MonadIO m => Object t -> Text -> m Bool
     linkExists p name = liftIO $ h5l_exists (getRawHandle p) name H5P_DEFAULT
@@ -329,7 +392,7 @@ createDataset object name (Blob dims _) =
 
 withDataset ::
   forall a t b m.
-  (MonadIO m, MonadMask m, KnownDatatype' a) =>
+  (FileOrGroup t, MonadIO m, MonadMask m, KnownDatatype' a) =>
   Object t ->
   Text ->
   Blob a ->
@@ -337,7 +400,7 @@ withDataset ::
   m b
 withDataset object name blob f =
   exists object name >>= \case
-    True -> object `byName` name $ \case
+    True -> byName object name $ \case
       Some x@(Dataset _) -> f x
       Some x -> do
         t <- _getObjectType (getRawHandle x)
@@ -351,7 +414,7 @@ withDataset object name blob f =
         h5Fail (Just msg) (-1 :: Int)
     False -> bracket (createDataset object name blob) close f
 
-writeDataset :: forall a b t m. (MonadIO m, MonadMask m, ToBlob b a) => Object t -> Text -> b -> m ()
+writeDataset :: forall a b t m. (FileOrGroup t, MonadIO m, MonadMask m, ToBlob b a) => Object t -> Text -> b -> m ()
 writeDataset object name tensor =
   withDataset object name blob $ \dataset -> do
     dims' <- getDatasetDims dataset
@@ -455,25 +518,8 @@ instance KnownDatatype' Text where
   h5With x f = useAsCString (encodeUtf8 x) $ \p ->
     with p $ \p' -> f (castPtr p') 1
 
--- class KnownDatatype a where
---   withDatatype :: (MonadIO m, MonadThrow m) => proxy a -> (Datatype -> m b) -> m b
-
 fromStaticPointer :: MonadIO m => Ptr Hid -> (Datatype -> m b) -> m b
 fromStaticPointer p f = f . Datatype =<< liftIO (peek p)
-
--- instance KnownDatatype Float where withDatatype p f = f (nativeType p)
-
--- instance KnownDatatype Double where withDatatype p f = f (nativeType p)
-
--- guessDatatype ::
---   (MonadIO m, MonadThrow m) =>
---   Datatype ->
---   (forall a proxy. KnownDatatype a => proxy a -> m b) ->
---   m b
--- guessDatatype dtype f
---   | dtype == nativeType (Proxy @Float) = f (Proxy @Float)
---   | dtype == nativeType (Proxy @Double) = f (Proxy @Double)
---   | otherwise = undefined
 
 --------------------------------------------------------------------------------
 -- Dataspaces
