@@ -56,9 +56,10 @@ module Data.HDF5
 
     -- |
     Object (..),
-    -- File,
-    Group (..),
-    Dataset (..),
+    File,
+    Group,
+    Dataset,
+    Datatype,
     -- Datatype,
     FileOrGroup,
     exists,
@@ -234,7 +235,7 @@ getObjectType' (Group _) = GroupTy
 getObjectType' (Dataset _) = DatasetTy
 getObjectType' (Datatype _) = DatatypeTy
 
-matchFail :: forall t' t m. (HasCallStack, GetObjectType t, MonadThrow m) => Object t' -> m (Object t)
+matchFail :: forall t' t m. (HasCallStack, GetObjectType t) => Object t' -> m (Object t)
 matchFail x = error $ "wrong object type: " <> show t' <> "; expected " <> show t
   where
     t' = getObjectType' x
@@ -257,7 +258,6 @@ openByIndex parent i = do
   _constructObject r
   where
     !h = getRawHandle parent
-    msg = Just $ "error opening object at index " <> show i
 
 openByName :: (MonadIO m, MonadMask m) => Object t -> Text -> m (Some Object)
 openByName parent path = do
