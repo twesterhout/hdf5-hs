@@ -467,6 +467,7 @@ h5a_get_data_size attrId =
 -- {#fun H5LTget_attribute as h5lt_get_attribute { `Hid', `String', `String', `Hid', `Ptr ()' } -> `Herr' #}
 
 foreign import ccall unsafe "&H5T_NATIVE_INT64_g" h5t_NATIVE_INT64 :: Ptr Hid
+foreign import ccall unsafe "&H5T_NATIVE_UINT64_g" h5t_NATIVE_UINT64 :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_FLOAT_g" h5t_NATIVE_FLOAT :: Ptr Hid
 foreign import ccall unsafe "&H5T_NATIVE_DOUBLE_g" h5t_NATIVE_DOUBLE :: Ptr Hid
 foreign import ccall unsafe "&H5T_C_S1_g" h5t_C_S1 :: Ptr Hid

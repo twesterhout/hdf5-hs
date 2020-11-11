@@ -491,6 +491,10 @@ instance KnownDatatype' Int where
   withDatatype' _ = fromStaticPointer h5t_NATIVE_INT64
   hasStorable _ = Just Dict
 
+instance KnownDatatype' Word64 where
+  withDatatype' _ = fromStaticPointer h5t_NATIVE_UINT64
+  hasStorable _ = Just Dict
+
 instance KnownDatatype' Float where
   withDatatype' _ = fromStaticPointer h5t_NATIVE_FLOAT
   hasStorable _ = Just Dict
