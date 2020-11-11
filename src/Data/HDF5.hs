@@ -40,6 +40,7 @@ module Data.HDF5
 
     -- |
     Blob (..),
+    ToBlob (..),
     readDataset,
     writeDataset,
     getDatasetDims,
