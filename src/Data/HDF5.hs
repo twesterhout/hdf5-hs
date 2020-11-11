@@ -334,6 +334,9 @@ class (Storable b, KnownDatatype' b) => ToBlob a b | a -> b where
 instance (Storable a, KnownDatatype' a) => ToBlob (Blob a) a where
   toBlob = id
 
+instance (Storable a, KnownDatatype' a) => ToBlob (Vector a) a where
+  toBlob v = Blob [V.length v] v
+
 instance (Storable a, KnownDatatype' a) => ToBlob [a] a where
   toBlob xs = Blob [V.length v] v
     where
