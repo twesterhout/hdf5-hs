@@ -45,6 +45,9 @@ module Data.HDF5
     writeDataset,
     getDatasetDims,
 
+    -- * Datatypes
+    KnownDatatype' (..),
+
     -- * Attributes
 
     -- |
@@ -61,7 +64,6 @@ module Data.HDF5
     Group,
     Dataset,
     Datatype,
-    -- Datatype,
     FileOrGroup,
     exists,
     delete,
