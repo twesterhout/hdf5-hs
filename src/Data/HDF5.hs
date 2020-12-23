@@ -184,10 +184,22 @@ close = \case
   (File h) -> liftIO . h5f_close $ h
   object -> liftIO . h5o_close . getRawHandle $ object
 
+-- | Obtain number of elements in a group (or file).
+--
+-- This function is not recursive! It only counts immediate children.
 getSize :: (MonadIO m, FileOrGroup t) => Object t -> m Int
 getSize = liftIO . h5g_get_num_objs . getRawHandle
 
-getName :: MonadIO m => Object t -> m Text
+-- | Obtain name of an object (file, group, dataset, or datatype).
+--
+-- This action is monadic since another thread or process can rename or delete
+-- the object.
+--
+-- >>> H5.withFile "test.h5" ReadMode $ \file ->
+-- >>>   H5.byName file "/g/A" $ \(Some object) ->
+-- >>>     print =<< H5.getName object
+-- "/g/A"
+getName :: (HasCallStack, MonadIO m) => Object t -> m Text
 getName object =
   liftIO $
     h5i_get_name h nullPtr 0 >>= \r ->
@@ -218,6 +230,12 @@ instance MatchM Datatype where
   matchM' x@(Datatype _) = return x
   matchM' x = matchFail x
 
+-- | Help with pattern matching on specific object types.
+--
+-- > withFile "my_data.h5" ReadWriteMode $ \file ->
+-- >   -- Open "group1" and prove to GHC that it's a Group
+-- >   file `byName` "/group1" . matchM @Group $ \g ->
+-- >     getName g >>= print
 matchM :: (HasCallStack, MatchM t, MonadThrow m) => (t -> m a) -> Some Object -> m a
 matchM f (Some object) = matchM' object >>= f
 
@@ -269,6 +287,7 @@ openByName parent path = do
   where
     msg = Just $ "error opening object at path " <> show path
 
+-- | Access object at specific index.
 byIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> (Some Object -> m a) -> m a
 byIndex g i = bracket (openByIndex g i) (\(Some x) -> close x)
 
