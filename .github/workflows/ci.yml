@@ -9,12 +9,12 @@ on:
 jobs:
   build:
     name: ghc ${{ matrix.ghc }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, macos-latest]
         cabal: ["3.0.0.0"]
-        ghc:
-          - "8.8.4"
+        ghc: ["8.8.4"]
 
     steps:
     - uses: actions/checkout@v2
@@ -31,10 +31,16 @@ jobs:
         path: ~/.cabal/store
         key: ${{ runner.os }}-${{ matrix.ghc }}-cabal
 
-    - name: Install HDF5
+    - name: Install HDF5 (apt)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - name: Install HDF5 (brew)
+      if: runner.os == 'macOS'
+      run: |
+        brew install hdf5
 
     - name: Build
       run: |
