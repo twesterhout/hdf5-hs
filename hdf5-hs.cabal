@@ -16,6 +16,7 @@ extra-doc-files:     README.md
 tested-with:         GHC == 8.8.4
                      -- GHC == 8.6.5
                      -- GHC == 8.10.1
+extra-source-files:  cbits/wrapper.h
 
 source-repository head
   type:                git
@@ -79,6 +80,7 @@ common common-options
 library
   import:              common-options
   hs-source-dirs:      src
+  c-sources:           cbits/wrapper.c
   build-tool-depends:  c2hs:c2hs >= 0.28.6
   build-depends:     , directory
                      , safe-exceptions
@@ -89,6 +91,7 @@ library
                      , constraints
   exposed-modules:     Data.HDF5
                      , Data.HDF5.Internal
+  include-dirs:        cbits
   if os(darwin) || os(osx)
     extra-libraries:   hdf5_hl
                        hdf5

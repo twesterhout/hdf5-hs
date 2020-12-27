@@ -18,6 +18,7 @@ import Prelude (error)
 
 #include <hdf5.h>
 #include <hdf5_hl.h>
+#include "wrapper.h"
 
 type Hid = {#type hid_t#}
 type Herr = {#type herr_t#}
@@ -267,27 +268,12 @@ withText text = useAsCString (encodeUtf8 text)
   { `Hid', withText* `Text', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' _checkError* #}
 {#fun H5Oclose as h5o_close { `Hid' } -> `Herr' _checkError*- #}
 
-#if H5_VERS_MAJOR == 1 && (H5_VERS_MINOR < 10 || (H5_VERS_MINOR == 10 && H5_VERS_RELEASE <= 3))
--- herr_t H5Oget_info ( hid_t loc_id, H5O_info_t *oinfo )
-{#fun H5Oget_info as h5o_get_info' { `Hid', `Ptr ()' } -> `()' _checkError*- #}
+{#fun wrapper_h5o_get_type as h5o_get_type' { `Hid', id `Ptr CInt' } -> `()' _checkError*- #}
 
 h5o_get_type :: Hid -> IO H5O_type_t
 h5o_get_type h =
-  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
-    h5o_get_info' h ptr
-    toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
-#else
--- herr_t H5Oget_info2 ( hid_t loc_id, H5O_info2_t *oinfo, unsigned fields )
-{#fun H5Oget_info2 as h5o_get_info' { `Hid', `Ptr ()', `CUInt' } -> `()' _checkError*- #}
-
-h5o_get_type :: Hid -> IO H5O_type_t
-h5o_get_type h =
-  allocaBytesAligned {#sizeof H5O_info_t#} {#alignof H5O_info_t#} $ \ptr -> do
-    h5o_get_info' h ptr h5o_INFO_BASIC
-    toEnum <$> (fromIntegral :: CInt -> Int) <$> peekByteOff ptr {#offsetof H5O_info_t->type#}
-  where h5o_INFO_BASIC :: CUInt
-        h5o_INFO_BASIC = 1
-#endif
+  allocaBytesAligned {#sizeof H5O_type_t#} {#alignof H5O_type_t#} $ \ptr ->
+     h5o_get_type' h ptr >> fmap (toEnum . fromIntegral) (peek ptr)
 
 -- htri_t H5Iis_valid( hid_t obj_id )
 {#fun H5Iis_valid as h5i_is_valid { `Hid' } -> `Bool' _toBool* #}
