@@ -10,7 +10,7 @@ license-file:        LICENSE
 author:              Tom Westerhout
 maintainer:          Tom Westerhout <14264576+twesterhout@users.noreply.github.com>
 copyright:           2020 Tom Westerhout
-build-type:          Simple
+build-type:          Custom
 extra-doc-files:     README.md
                      CHANGELOG.md
 tested-with:         GHC == 8.8.4
@@ -26,12 +26,13 @@ flag in_singularity
   description:         Building inside Alpine Linux Singularity container
   default:             False
 
-common common-options
-  build-depends:       base >= 4.12.0.0 && < 4.15
-                     , relude
+custom-setup
+  setup-depends:       base >= 4 && < 5, cabal-doctest >= 1 && < 1.1
 
-  -- mixins:              base hiding (Prelude)
-  --                    , relude (Relude as Prelude)
+common common-options
+  build-depends:       base >= 4.12.0.0 && < 5
+                     , relude
+                     , process >= 1.2
 
   ghc-options:         -Wall
                        -Wcompat
@@ -162,6 +163,14 @@ test-suite hdf5-hs-test
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+
+test-suite doctests
+  import:              common-options
+  type:                exitcode-stdio-1.0
+  main-is:             doctests.hs
+  build-depends:       hdf5-hs
+                     , doctest
+  hs-source-dirs:      test
 
 benchmark hdf5-hs-benchmark
   import:              common-options

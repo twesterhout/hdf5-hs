@@ -76,10 +76,10 @@ module Data.HDF5
     H5Exception (..),
 
     -- * Re-exports
-
-    -- | He-he-he
     IOMode (..),
-    Some (..),
+    module Data.Some,
+    -- | He-he-he
+    dump,
   )
 where
 
@@ -103,8 +103,20 @@ import Foreign.Storable (Storable (..))
 import qualified GHC.TypeLits
 import Relude hiding (find, group, withFile)
 import System.Directory (doesFileExist)
+import System.Process (callProcess)
 
--- import Unsafe.Coerce
+-- $setup
+-- >>> import qualified Data.HDF5 as H5
+-- >>> import Data.HDF5 (IOMode(..))
+
+-- | Run @h5dump@ command with given arguments.
+dump ::
+  -- | Arguments to @h5dump@
+  [Text] ->
+  -- | Path to HDF5 file
+  Text ->
+  IO ()
+dump args path = callProcess "h5dump" (toString <$> args <> [path])
 
 --------------------------------------------------------------------------------
 -- Files
@@ -125,6 +137,15 @@ openFile path mode =
     fileNotFound = throw . H5Exception (-1) [] . Just $ "file " <> show path <> " not found"
 
 -- | Do some work with a file.
+--
+-- Here's an example creating a new file:
+-- >>> :{
+--   H5.withFile "empty.h5" WriteMode $ \file -> do
+--     n <- H5.getSize file
+--     if n == 0 then putStrLn "file is empty"
+--               else putStrLn "file is non-empty"
+-- :}
+-- file is empty
 withFile ::
   (MonadIO m, MonadMask m) =>
   -- | filename
@@ -186,7 +207,33 @@ close = \case
 
 -- | Obtain number of elements in a group (or file).
 --
--- This function is not recursive! It only counts immediate children.
+-- This function is not recursive! It only counts immediate children. Thus if we
+-- have the following file:
+--
+-- >>> dump ["-H"] "example/test.h5"
+-- HDF5 "example/test.h5" {
+-- GROUP "/" {
+--    GROUP "g" {
+--       GROUP "A" {
+--       }
+--       DATASET "dataset1" {
+--          DATATYPE  H5T_STD_I64LE
+--          DATASPACE  SIMPLE { ( 4 ) / ( 4 ) }
+--       }
+--    }
+-- }
+-- }
+-- >>> :{
+--   H5.withFile "example/test.h5" ReadMode $ \file -> do
+--     n₁ <- H5.getSize file
+--     n₂ <- H5.byName file "g" . matchM @Group $ H5.getSize
+--     print n₁
+--     print n₂
+-- :}
+-- 1
+-- 2
+--
+-- 'getSize' only considers @"g"@ as immediade child of @/@.
 getSize :: (MonadIO m, FileOrGroup t) => Object t -> m Int
 getSize = liftIO . h5g_get_num_objs . getRawHandle
 
@@ -195,9 +242,10 @@ getSize = liftIO . h5g_get_num_objs . getRawHandle
 -- This action is monadic since another thread or process can rename or delete
 -- the object.
 --
--- >>> H5.withFile "test.h5" ReadMode $ \file ->
--- >>>   H5.byName file "/g/A" $ \(Some object) ->
--- >>>     print =<< H5.getName object
+-- >>> :{
+--   H5.withFile "example/test.h5" ReadMode $ \file ->
+--     print =<< H5.byName file "/g/A" (foldSome H5.getName)
+-- :}
 -- "/g/A"
 getName :: (HasCallStack, MonadIO m) => Object t -> m Text
 getName object =
