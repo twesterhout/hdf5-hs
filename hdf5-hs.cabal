@@ -8,7 +8,7 @@ bug-reports:         https://github.com/twesterhout/hdf5-hs/issues
 license:             BSD-3-Clause
 license-file:        LICENSE
 author:              Tom Westerhout
-maintainer:          Tom Westerhout <>
+maintainer:          Tom Westerhout <14264576+twesterhout@users.noreply.github.com>
 copyright:           2020 Tom Westerhout
 build-type:          Simple
 extra-doc-files:     README.md
@@ -89,17 +89,15 @@ library
                      , constraints
   exposed-modules:     Data.HDF5
                      , Data.HDF5.Internal
-  -- On Debian after installing libhdf5-dev
-  if !flag(in_singularity)
+  if os(darwin) || os(osx)
+    extra-libraries:   hdf5_hl
+                       hdf5
+  else
+    -- On Debian or Ubuntu after installing libhdf5-dev
     include-dirs:      /usr/include/hdf5/serial
     extra-libraries:   hdf5_serial_hl
-                     , hdf5_serial
-                     , z
-  if flag(in_singularity)
-    extra-libraries:   hdf5_hl
-                     , hdf5
-                     , z
-    ghc-options:       -fPIC
+                       hdf5_serial
+                       z
 
 executable hdf5-hs
   import:              common-options
