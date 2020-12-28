@@ -253,6 +253,9 @@ _toBool c = (> 0) <$> _checkError c
 withText :: Text -> (CString -> IO a) -> IO a
 withText text = useAsCString (encodeUtf8 text)
 
+-- herr_t H5open ( void )
+{#fun H5open as h5_open { } -> `()' _checkError*- #}
+
 -- hid_t H5Fopen( const char *name, unsigned flags, hid_t fapl_id )
 {#fun H5Fopen as h5f_open { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT' } -> `File' _createObject* #}
 -- hid_t H5Fcreate( const char *name, unsigned flags, hid_t fcpl_id, hid_t fapl_id )

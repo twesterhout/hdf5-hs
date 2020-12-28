@@ -124,7 +124,8 @@ dump args path = callProcess "h5dump" (toString <$> args <> [path])
 
 openFile :: MonadIO m => Text -> IOMode -> m File
 openFile path mode =
-  liftIO $
+  liftIO $ do
+    h5_open
     doesFileExist (toString path) >>= \case
       True -> case mode of
         ReadMode -> h5f_open path H5F_ACC_RDONLY H5P_DEFAULT
