@@ -124,16 +124,15 @@ dump args path = callProcess "h5dump" (toString <$> args <> [path])
 
 openFile :: MonadIO m => Text -> IOMode -> m File
 openFile path mode =
-  liftIO $ do
-    h5_open
+  liftIO $
     doesFileExist (toString path) >>= \case
       True -> case mode of
-        ReadMode -> h5f_open path H5F_ACC_RDONLY H5P_DEFAULT
-        WriteMode -> h5f_create path H5F_ACC_TRUNC H5P_DEFAULT H5P_DEFAULT
-        _ -> h5f_open path H5F_ACC_RDWR H5P_DEFAULT
+        ReadMode -> h5f_open path c_H5F_ACC_RDONLY c_H5P_DEFAULT
+        WriteMode -> h5f_create path c_H5F_ACC_TRUNC c_H5P_DEFAULT c_H5P_DEFAULT
+        _ -> h5f_open path c_H5F_ACC_RDWR c_H5P_DEFAULT
       False -> case mode of
         ReadMode -> fileNotFound
-        _ -> h5f_create path H5F_ACC_EXCL H5P_DEFAULT H5P_DEFAULT
+        _ -> h5f_create path c_H5F_ACC_EXCL c_H5P_DEFAULT c_H5P_DEFAULT
   where
     fileNotFound = throw . H5Exception (-1) [] . Just $ "file " <> show path <> " not found"
 
@@ -324,14 +323,14 @@ openByIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> m (
 openByIndex parent i = do
   n <- getSize parent
   when (i < 0 || i >= n) . error $ "invalid index: " <> show i
-  r <- liftIO $ h5o_open_by_idx h "." H5_INDEX_NAME H5_ITER_INC i H5P_DEFAULT
+  r <- liftIO $ h5o_open_by_idx h "." H5_INDEX_NAME H5_ITER_INC i c_H5P_DEFAULT
   _constructObject r
   where
     !h = getRawHandle parent
 
 openByName :: (MonadIO m, MonadMask m) => Object t -> Text -> m (Some Object)
 openByName parent path = do
-  r <- (h5Check msg =<<) . liftIO $ h5o_open (getRawHandle parent) path H5P_DEFAULT
+  r <- (h5Check msg =<<) . liftIO $ h5o_open (getRawHandle parent) path c_H5P_DEFAULT
   _constructObject r
   where
     msg = Just $ "error opening object at path " <> show path
@@ -354,7 +353,7 @@ foldM !f !acc₀ = \g -> go g 0 acc₀
           else return acc
 
 delete :: MonadIO m => Object t -> Text -> m ()
-delete parent path = liftIO $ h5l_delete (getRawHandle parent) path H5P_DEFAULT
+delete parent path = liftIO $ h5l_delete (getRawHandle parent) path c_H5P_DEFAULT
 
 withRoot :: (MonadIO m, MonadMask m) => Object t -> (Group -> m a) -> m a
 withRoot x@(File _) func = x `byName` "/" $ \case
@@ -379,7 +378,7 @@ exists parent path
             _ -> return (null rest)
         False -> return False
     linkExists :: MonadIO m => Object t -> Text -> m Bool
-    linkExists p name = liftIO $ h5l_exists (getRawHandle p) name H5P_DEFAULT
+    linkExists p name = liftIO $ h5l_exists (getRawHandle p) name c_H5P_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Groups
@@ -388,7 +387,7 @@ exists parent path
 makeGroup :: MonadIO m => Object t -> Text -> m ()
 makeGroup parent path = create >>= close
   where
-    create = liftIO $ h5g_create (getRawHandle parent) path H5P_DEFAULT H5P_DEFAULT H5P_DEFAULT
+    create = liftIO $ h5g_create (getRawHandle parent) path c_H5P_DEFAULT c_H5P_DEFAULT c_H5P_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Datasets
@@ -439,7 +438,7 @@ readDataset dataset = do
     v <- liftIO $ do
       buffer <- MV.unsafeNew (product dims)
       MV.unsafeWith buffer $ \ptr ->
-        h5d_read (getRawHandle dataset) (getRawHandle dtype) h5s_ALL h5s_ALL H5P_DEFAULT (castPtr ptr)
+        h5d_read (getRawHandle dataset) (getRawHandle dtype) c_H5S_ALL c_H5S_ALL c_H5P_DEFAULT (castPtr ptr)
       V.unsafeFreeze buffer
     return $ Blob dims v
 
@@ -460,9 +459,9 @@ createDataset object name (Blob dims _) =
         name
         (getRawHandle dtype)
         (unDataspace dataspace)
-        H5P_DEFAULT
-        H5P_DEFAULT
-        H5P_DEFAULT
+        c_H5P_DEFAULT
+        c_H5P_DEFAULT
+        c_H5P_DEFAULT
 
 withDataset ::
   forall a t b m.
@@ -499,7 +498,7 @@ writeDataset object name tensor =
       checkDatasetDatatype dataset dtype
       liftIO $
         V.unsafeWith v $ \ptr ->
-          h5d_write (getRawHandle dataset) (getRawHandle dtype) h5s_ALL h5s_ALL H5P_DEFAULT (castPtr ptr)
+          h5d_write (getRawHandle dataset) (getRawHandle dtype) c_H5S_ALL c_H5S_ALL c_H5P_DEFAULT (castPtr ptr)
   where
     blob@(Blob dims v) = toBlob tensor
 
@@ -531,7 +530,7 @@ withTextDatatype = bracket (liftIO acquire) close
       dtype <- h5t_copy =<< peek h5t_C_S1
       flip onException (close dtype) $ do
         h5t_set_cset (getRawHandle dtype) H5T_CSET_UTF8
-        h5t_set_size (getRawHandle dtype) h5t_VARIABLE
+        h5t_set_size (getRawHandle dtype) c_H5T_VARIABLE
       return dtype
 
 -- | Specifies size of a 'Datatype'.
@@ -622,7 +621,7 @@ withDatasetDataspace dataset =
 newtype Attribute = Attribute {unAttribute :: Hid}
 
 openAttribute :: MonadIO m => Object t -> Text -> m Attribute
-openAttribute object name = liftIO $ Attribute <$> h5a_open (getRawHandle object) name H5P_DEFAULT
+openAttribute object name = liftIO $ Attribute <$> h5a_open (getRawHandle object) name c_H5P_DEFAULT
 
 createAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> Datatype -> m Attribute
 createAttribute object name dtype =
@@ -634,8 +633,8 @@ createAttribute object name dtype =
           name
           (getRawHandle dtype)
           (unDataspace dataspace)
-          H5P_DEFAULT
-          H5P_DEFAULT
+          c_H5P_DEFAULT
+          c_H5P_DEFAULT
 
 withAttribute :: (MonadIO m, MonadMask m) => Object t -> Text -> (Attribute -> m a) -> m a
 withAttribute object name = bracket (openAttribute object name) (liftIO . h5a_close . unAttribute)

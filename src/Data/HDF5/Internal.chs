@@ -36,43 +36,23 @@ type CSize = {#type size_t#}
 {#typedef htri_t Htri#}
 {#typedef hbool_t Hbool#}
 
-data H5P_DEFAULT = H5P_DEFAULT
 
-instance Enum H5P_DEFAULT where
-  toEnum = error "Enum.toEnum is not defined for H5P_DEFAULT"
-  fromEnum H5P_DEFAULT = 0
+foreign import ccall unsafe "wrapper_get_constants" getConstants :: Ptr ()
 
-{#default in `H5P_DEFAULT' [hid_t] withEnum#}
-
-h5t_VARIABLE :: CSize
--- #define H5T_VARIABLE    ((size_t)(-1))  /* Indicate that a string is variable length (null-terminated in C, instead of fixed length) */
-h5t_VARIABLE = maxBound
-
-h5s_ALL :: Hid
--- #define H5S_ALL         (hid_t)0
-h5s_ALL = 0
-
-data H5F_ACC
-  = H5F_ACC_RDONLY
-  | H5F_ACC_RDWR
-  | H5F_ACC_TRUNC
-  | H5F_ACC_EXCL
-  | H5F_ACC_DEBUG
-  | H5F_ACC_CREAT
-  | H5F_ACC_SWMR_WRITE
-  | H5F_ACC_SWMR_READ
-
-instance Enum H5F_ACC where
-  toEnum = error "Enum.toEnum is not defined for H5F_ACC"
-  fromEnum = \case
-    H5F_ACC_RDONLY -> 0x0000
-    H5F_ACC_RDWR -> 0x0001
-    H5F_ACC_TRUNC -> 0x0002
-    H5F_ACC_EXCL -> 0x0004
-    H5F_ACC_DEBUG -> 0x0008
-    H5F_ACC_CREAT -> 0x0010
-    H5F_ACC_SWMR_WRITE -> 0x0020
-    H5F_ACC_SWMR_READ -> 0x0040
+c_H5P_DEFAULT :: Hid
+c_H5P_DEFAULT = unsafePerformIO $! {#get wrapper_constants->c_H5P_DEFAULT#} getConstants
+c_H5T_VARIABLE :: CSize
+c_H5T_VARIABLE = unsafePerformIO $! fromIntegral <$> {#get wrapper_constants->c_H5T_VARIABLE#} getConstants
+c_H5S_ALL :: Hid
+c_H5S_ALL = unsafePerformIO $! {#get wrapper_constants->c_H5S_ALL#} getConstants
+c_H5F_ACC_RDONLY :: CUInt
+c_H5F_ACC_RDONLY = unsafePerformIO $! {#get wrapper_constants->c_H5F_ACC_RDONLY#} getConstants
+c_H5F_ACC_TRUNC :: CUInt
+c_H5F_ACC_TRUNC = unsafePerformIO $! {#get wrapper_constants->c_H5F_ACC_TRUNC#} getConstants
+c_H5F_ACC_RDWR :: CUInt
+c_H5F_ACC_RDWR = unsafePerformIO $! {#get wrapper_constants->c_H5F_ACC_RDWR#} getConstants
+c_H5F_ACC_EXCL :: CUInt
+c_H5F_ACC_EXCL = unsafePerformIO $! {#get wrapper_constants->c_H5F_ACC_EXCL#} getConstants
 
 {#enum H5_iter_order_t {} #}
 {#enum H5_index_t {} #}
@@ -253,22 +233,19 @@ _toBool c = (> 0) <$> _checkError c
 withText :: Text -> (CString -> IO a) -> IO a
 withText text = useAsCString (encodeUtf8 text)
 
--- herr_t H5open ( void )
-{#fun H5open as h5_open { } -> `()' _checkError*- #}
-
 -- hid_t H5Fopen( const char *name, unsigned flags, hid_t fapl_id )
-{#fun H5Fopen as h5f_open { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT' } -> `File' _createObject* #}
+{#fun H5Fopen as h5f_open { withText* `Text', `CUInt', `Hid' } -> `File' _createObject* #}
 -- hid_t H5Fcreate( const char *name, unsigned flags, hid_t fcpl_id, hid_t fapl_id )
 {#fun H5Fcreate as h5f_create
-  { withText* `Text', withEnum `H5F_ACC', `H5P_DEFAULT', `H5P_DEFAULT' } -> `File' _createObject* #}
+  { withText* `Text', `CUInt', `Hid', `Hid' } -> `File' _createObject* #}
 -- herr_t H5Fclose( hid_t file_id )
 {#fun H5Fclose as h5f_close { `Hid' } -> `Herr' _checkError*- #}
 
 -- hid_t H5Oopen( hid_t loc_id, const char *name, hid_t lapl_id )
-{#fun H5Oopen as h5o_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+{#fun H5Oopen as h5o_open { `Hid', withText* `Text', `Hid' } -> `Hid' _checkError* #}
 -- hid_t H5Oopen_by_idx( hid_t loc_id, const char *group_name, H5_index_t index_type, H5_iter_order_t order, hsize_t n, hid_t lapl_id )
 {#fun H5Oopen_by_idx as h5o_open_by_idx
-  { `Hid', withText* `Text', `H5_index_t', `H5_iter_order_t', `Int', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+  { `Hid', withText* `Text', `H5_index_t', `H5_iter_order_t', `Int', `Hid' } -> `Hid' _checkError* #}
 {#fun H5Oclose as h5o_close { `Hid' } -> `Herr' _checkError*- #}
 
 {#fun wrapper_h5o_get_type as h5o_get_type' { `Hid', id `Ptr CInt' } -> `()' _checkError*- #}
@@ -298,12 +275,12 @@ h5g_get_num_objs groupId =
     return $ fromIntegral count
 -- hid_t H5Gcreate2( hid_t loc_id, const char *name, hid_t lcpl_id, hid_t gcpl_id, hid_t gapl_id )
 {#fun H5Gcreate2 as h5g_create
-  { `Hid', withText* `Text', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Group' _createObject* #}
+  { `Hid', withText* `Text', `Hid', `Hid', `Hid' } -> `Group' _createObject* #}
 
 -- herr_t H5Ldelete( hid_t loc_id, const char *name, hid_t lapl_id )
-{#fun H5Ldelete as h5l_delete { `Hid', withText* `Text', `H5P_DEFAULT' } -> `()' _checkError*- #}
+{#fun H5Ldelete as h5l_delete { `Hid', withText* `Text', `Hid' } -> `()' _checkError*- #}
 -- htri_t H5Lexists( hid_t loc_id, const char *name, hid_t lapl_id )
-{#fun H5Lexists as h5l_exists { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Bool' _toBool* #}
+{#fun H5Lexists as h5l_exists { `Hid', withText* `Text', `Hid' } -> `Bool' _toBool* #}
 
 -- hid_t H5Dget_type(hid_t dataset_id )
 {#fun H5Dget_type as h5d_get_type { `Hid' } -> `Datatype' _createObject* #}
@@ -314,17 +291,17 @@ h5g_get_num_objs groupId =
 -- herr_t H5Dread(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id,
 --                hid_t file_space_id, hid_t xfer_plist_id, void * buf)
 {#fun H5Dread as h5d_read
-  { `Hid', `Hid', `Hid', `Hid', `H5P_DEFAULT', `Ptr ()' } -> `()' _checkError*- #}
+  { `Hid', `Hid', `Hid', `Hid', `Hid', `Ptr ()' } -> `()' _checkError*- #}
 -- herr_t H5Dwrite(hid_t dataset_id, hid_t mem_type_id, hid_t mem_space_id,
 --                 hid_t file_space_id, hid_t xfer_plist_id, const void * buf)
 {#fun H5Dwrite as h5d_write
-  { `Hid', `Hid', `Hid', `Hid', `H5P_DEFAULT', `Ptr ()' } -> `()' _checkError*- #}
+  { `Hid', `Hid', `Hid', `Hid', `Hid', `Ptr ()' } -> `()' _checkError*- #}
 
 -- hid_t H5Dget_space(hid_t dataset_id)
 {#fun H5Dget_space as h5d_get_space { `Hid' } -> `Hid' _checkError* #}
 -- hid_t H5Dcreate2(hid_t loc_id, const char *name, hid_t dtype_id, hid_t space_id, hid_t lcpl_id, hid_t dcpl_id, hid_t dapl_id)
 {#fun H5Dcreate2 as h5d_create2
-  { `Hid', withText* `Text', `Hid', `Hid', `H5P_DEFAULT', `H5P_DEFAULT', `H5P_DEFAULT'
+  { `Hid', withText* `Text', `Hid', `Hid', `Hid', `Hid', `Hid'
     } -> `Dataset' _createObject* #}
 
 -- hid_t H5Tcreate( H5T_class_t class, size_t size )
@@ -383,12 +360,12 @@ instance Show Datatype where show = showDatatype
 
 
 -- hid_t H5Aopen(hid_t obj_id, const char *attr_name, hid_t aapl_id)
-{#fun H5Aopen as h5a_open { `Hid', withText* `Text', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+{#fun H5Aopen as h5a_open { `Hid', withText* `Text', `Hid' } -> `Hid' _checkError* #}
 -- herr_t H5Aclose(hid_t attr_id)
 {#fun H5Aclose as h5a_close { `Hid' } -> `()' _checkError*- #}
 -- hid_t H5Acreate2(hid_t loc_id, const char *attr_name, hid_t type_id, hid_t space_id, hid_t acpl_id, hid_t aapl_id)
 {#fun H5Acreate2 as h5a_create2
-  { `Hid', withText* `Text', `Hid', `Hid', `H5P_DEFAULT', `H5P_DEFAULT' } -> `Hid' _checkError* #}
+  { `Hid', withText* `Text', `Hid', `Hid', `Hid', `Hid' } -> `Hid' _checkError* #}
 -- herr_t H5Adelete(hid_t loc_id, const char *attr_name)
 {#fun H5Adelete as h5a_delete { `Hid', withText* `Text' } -> `()' _checkError*- #}
 -- hid_t H5Aget_type(hid_t attr_id)
