@@ -26,17 +26,18 @@ type Hsize = {#type hsize_t#}
 type Hssize = {#type hssize_t#}
 type Htri = {#type htri_t#}
 type Hbool = {#type hbool_t#}
-
 type CSize = {#type size_t#}
 
 {#typedef herr_t Herr#}
 {#typedef hid_t Hid#}
--- {#typedef hsize_t Hsize#}
--- {#typedef hssize_t Hssize#}
 {#typedef htri_t Htri#}
 {#typedef hbool_t Hbool#}
 
-
+-- This is a trick to handle #define'd constants which include type conversions
+-- and other shenanigans. c2hs can't handle them and it feels wrong to hardcode
+-- numbers here. The solution we use it to create a C structure in wrapper.c
+-- which contains all the needed constants as members. This structure is
+-- initialized once and then we use c2hs to access specific members.
 foreign import ccall unsafe "wrapper_get_constants" getConstants :: Ptr ()
 
 c_H5P_DEFAULT :: Hid
@@ -63,9 +64,8 @@ c_H5F_ACC_EXCL = unsafePerformIO $! {#get wrapper_constants->c_H5F_ACC_EXCL#} ge
 {#enum H5LT_lang_t {} #}
 {#enum H5O_type_t {} deriving(Show) #}
 
-withEnum :: (Enum a, Integral b) => a -> b
-withEnum = fromIntegral . fromEnum
-
+-- withEnum :: (Enum a, Integral b) => a -> b
+-- withEnum = fromIntegral . fromEnum
 
 -- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
 -- while keeping everything type-safe.
@@ -88,7 +88,6 @@ type Group = Object 'GroupTy
 type Dataset = Object 'DatasetTy
 
 type Datatype = Object 'DatatypeTy
-
 
 class MkObject (t :: ObjectType) where
   unsafeMkObject :: Hid -> Object t
@@ -240,6 +239,8 @@ withText text = useAsCString (encodeUtf8 text)
   { withText* `Text', `CUInt', `Hid', `Hid' } -> `File' _createObject* #}
 -- herr_t H5Fclose( hid_t file_id )
 {#fun H5Fclose as h5f_close { `Hid' } -> `Herr' _checkError*- #}
+-- herr_t H5Fget_filesize(hid_t file_id, hsize_t *size)
+{#fun H5Fget_filesize as h5f_get_filesize { `Hid', id `Ptr Hsize' } -> `()' _checkError*- #}
 
 -- hid_t H5Oopen( hid_t loc_id, const char *name, hid_t lapl_id )
 {#fun H5Oopen as h5o_open { `Hid', withText* `Text', `Hid' } -> `Hid' _checkError* #}

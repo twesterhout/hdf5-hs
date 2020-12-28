@@ -164,13 +164,13 @@ test-suite hdf5-hs-test
                        -rtsopts
                        -with-rtsopts=-N
 
--- test-suite doctests
---   import:              common-options
---   type:                exitcode-stdio-1.0
---   main-is:             doctests.hs
---   build-depends:       hdf5-hs
---                      , doctest
---   hs-source-dirs:      test
+test-suite doctests
+  import:              common-options
+  type:                exitcode-stdio-1.0
+  main-is:             doctests.hs
+  build-depends:       hdf5-hs
+                     , doctest
+  hs-source-dirs:      test
 
 benchmark hdf5-hs-benchmark
   import:              common-options

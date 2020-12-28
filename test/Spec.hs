@@ -33,3 +33,5 @@ main = hspec $ do
       _ <- withFile "test/a_non_existant_file.h5" WriteMode (\(!_) -> return ())
       doesFileExist "test/a_non_existant_file.h5" `shouldReturn` True
       removeFile "test/a_non_existant_file.h5"
+    it "computes file size" $ do
+      withFile "test/reading_test.h5" ReadMode getFileSizeInBytes `shouldReturn` 5416

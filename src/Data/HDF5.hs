@@ -29,6 +29,7 @@ module Data.HDF5
     -- instead of HDF5-specific modes to stress that HDF5 files are no different
     -- from "normal" files.
     withFile,
+    getFileSizeInBytes,
 
     -- * Groups
 
@@ -109,7 +110,10 @@ import System.Process (callProcess)
 -- >>> import qualified Data.HDF5 as H5
 -- >>> import Data.HDF5 (IOMode(..))
 
--- | Run @h5dump@ command with given arguments.
+-- | Run external @h5dump@ command with given arguments.
+--
+-- /Note:/ you need @hdf5-tools@ package for this function to work. It is mainly
+-- used to testing.
 dump ::
   -- | Arguments to @h5dump@
   [Text] ->
@@ -136,16 +140,22 @@ openFile path mode =
   where
     fileNotFound = throw . H5Exception (-1) [] . Just $ "file " <> show path <> " not found"
 
--- | Do some work with a file.
+-- | [bracket](https://wiki.haskell.org/Bracket_pattern) for HDF5 files.
+--
+-- We reuse access modes from "System.IO".
 --
 -- Here's an example creating a new file:
+--
 -- >>> :{
 --   H5.withFile "empty.h5" WriteMode $ \file -> do
---     n <- H5.getSize file
+--     n <- H5.getSize file -- Note: getSize returns number of objects rather than number of bytes
 --     if n == 0 then putStrLn "file is empty"
 --               else putStrLn "file is non-empty"
 -- :}
 -- file is empty
+--
+-- >>> print =<< H5.withFile "a_non_existent_file.h5" ReadMode H5.getFileSizeInBytes
+-- *** Exception: ... file "a_non_existent_file.h5" not found
 withFile ::
   (MonadIO m, MonadMask m) =>
   -- | filename
@@ -157,20 +167,22 @@ withFile ::
   m a
 withFile path mode = bracket (openFile path mode) close
 
+-- | Obtain file size in bytes.
+getFileSizeInBytes ::
+  (MonadIO m, MonadMask m) =>
+  -- | file
+  File ->
+  -- | file size in bytes
+  m Int
+getFileSizeInBytes file = fmap fromIntegral . liftIO $
+  alloca $ \ptr -> h5f_get_filesize (getRawHandle file) ptr >> peek ptr
+
 --------------------------------------------------------------------------------
 -- Objects
 --------------------------------------------------------------------------------
 
 -- | A 'Constraint' to specify that the operation works for 'File' and 'Group',
 -- but not for other 'Object' types like 'Dataset' and 'Datatype'.
--- type family FileOrGroup (t :: ObjectType) :: Constraint where
---   FileOrGroup 'FileTy = ()
---   FileOrGroup 'GroupTy = ()
---   FileOrGroup t =
---     GHC.TypeLits.TypeError
---       ( 'GHC.TypeLits.Text "Expected either a File or a Group, but got "
---           'GHC.TypeLits.:<>: 'GHC.TypeLits.ShowType t
---       )
 type FileOrGroup (t :: ObjectType) = OneOf '[ 'FileTy, 'GroupTy] t
 
 type family ShowObjectType (t :: ObjectType) where
@@ -186,6 +198,8 @@ type family ErrorHelper (t :: ObjectType) :: Constraint where
           'GHC.TypeLits.:<>: ShowObjectType t
       )
 
+-- | A 'Constraint' to specify that type @x@ must be one of the types from the
+-- list @xs@.
 type family OneOf (xs :: [ObjectType]) (x :: ObjectType) :: Constraint where
   OneOf '[] x = ErrorHelper x
   OneOf (x ': ys) x = ()
@@ -200,6 +214,7 @@ getRawHandle (Datatype h) = h
 _getObjectType :: MonadIO m => Hid -> m H5O_type_t
 _getObjectType = liftIO . h5o_get_type
 
+-- | Close an object.
 close :: MonadIO m => Object t -> m ()
 close = \case
   (File h) -> liftIO . h5f_close $ h
@@ -319,14 +334,16 @@ _constructObject h =
       H5O_TYPE_NAMED_DATATYPE -> return . Some . Datatype $ h
       _ -> h5Fail (Just "unknown object type") (-1 :: Int)
 
-openByIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> m (Some Object)
+openByIndex ::
+  (MonadIO m, MonadMask m, FileOrGroup t) =>
+  Object t ->
+  Int ->
+  m (Some Object)
 openByIndex parent i = do
   n <- getSize parent
   when (i < 0 || i >= n) . error $ "invalid index: " <> show i
-  r <- liftIO $ h5o_open_by_idx h "." H5_INDEX_NAME H5_ITER_INC i c_H5P_DEFAULT
+  r <- liftIO $ h5o_open_by_idx (getRawHandle parent) "." H5_INDEX_NAME H5_ITER_INC i c_H5P_DEFAULT
   _constructObject r
-  where
-    !h = getRawHandle parent
 
 openByName :: (MonadIO m, MonadMask m) => Object t -> Text -> m (Some Object)
 openByName parent path = do
@@ -335,11 +352,45 @@ openByName parent path = do
   where
     msg = Just $ "error opening object at path " <> show path
 
--- | Access object at specific index.
-byIndex :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Int -> (Some Object -> m a) -> m a
+-- | Access a member of a file or group at given index.
+--
+-- Example:
+--
+-- >>> :{
+--   do
+--     -- First, create a few groups
+--     H5.withFile "example.h5" WriteMode $ \file -> do
+--       H5.makeGroup file "A"
+--       H5.makeGroup file "B"
+--       H5.makeGroup file "C"
+--     -- Get name of group at index 1
+--     name <- H5.withFile "example.h5" ReadMode $ \file ->
+--       byIndex file 1 (foldSome H5.getName)
+--     print name
+-- :}
+-- "/B"
+byIndex ::
+  (MonadIO m, MonadMask m, FileOrGroup t) =>
+  -- | Parent group or file
+  Object t ->
+  -- | Index
+  Int ->
+  -- | What to do with the object
+  (Some Object -> m a) ->
+  m a
 byIndex g i = bracket (openByIndex g i) (\(Some x) -> close x)
 
-byName :: (MonadIO m, MonadMask m, FileOrGroup t) => Object t -> Text -> (Some Object -> m a) -> m a
+-- | Access a member of a file or group by name. It is very similar to 'byIndex'
+-- except that a path to object is used instead of its index.
+byName ::
+  (MonadIO m, MonadMask m, FileOrGroup t) =>
+  -- | Parent group or file
+  Object t ->
+  -- | Path to object
+  Text ->
+  -- | What to do with the object
+  (Some Object -> m a) ->
+  m a
 byName object path = bracket (openByName object path) (\(Some x) -> close x)
 
 foldM :: forall a t m. (MonadIO m, MonadMask m, FileOrGroup t) => (a -> Some Object -> m a) -> a -> Object t -> m a
@@ -352,6 +403,24 @@ foldM !f !acc₀ = \g -> go g 0 acc₀
           then byIndex group i (f acc) >>= go group (i + 1)
           else return acc
 
+-- | Delete an object.
+--
+-- Here's an example. We first create a group "A", check that it is indeed
+-- present in the file, and then delete it.
+--
+-- >>> :{
+--   H5.withFile "example.h5" WriteMode $ \file -> do
+--     H5.makeGroup file "A"
+--     H5.exists file "A" >>= \case
+--       True -> putStrLn "created a group"
+--       False -> error "bug!"
+--     H5.delete file "A"
+--     H5.exists file "A" >>= \case
+--       True -> error "bug!"
+--       False -> putStrLn "deleted the group"
+-- :}
+-- created a group
+-- deleted the group
 delete :: MonadIO m => Object t -> Text -> m ()
 delete parent path = liftIO $ h5l_delete (getRawHandle parent) path c_H5P_DEFAULT
 
@@ -384,7 +453,7 @@ exists parent path
 -- Groups
 --------------------------------------------------------------------------------
 
-makeGroup :: MonadIO m => Object t -> Text -> m ()
+makeGroup :: (MonadIO m, FileOrGroup t) => Object t -> Text -> m ()
 makeGroup parent path = create >>= close
   where
     create = liftIO $ h5g_create (getRawHandle parent) path c_H5P_DEFAULT c_H5P_DEFAULT c_H5P_DEFAULT
