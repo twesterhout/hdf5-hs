@@ -116,6 +116,13 @@ executable hdf5-hs
   if flag(in_singularity)
     ld-options:        -static
 
+executable example00
+  import:              common-options
+  hs-source-dirs:      example
+  main-is:             example00.hs 
+  build-depends:       hdf5-hs
+                     , text
+
 executable example01
   import:              common-options
   hs-source-dirs:      example
