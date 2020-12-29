@@ -22,6 +22,9 @@ source-repository-package
     location: https://github.com/twesterhout/hdf5-hs.git
 ```
 
+Currently, Linux and OS X operating systems are supported. (I don't have
+experience or access to a Windows system, but a PR would be very welcome!)
+
 
 ## Simple example
 
