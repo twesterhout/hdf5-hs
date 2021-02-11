@@ -22,10 +22,6 @@ source-repository head
   type:                git
   location:            https://github.com/twesterhout/hdf5-hs.git
 
-flag in_singularity
-  description:         Building inside Alpine Linux Singularity container
-  default:             False
-
 custom-setup
   setup-depends:       base >= 4 && < 5, cabal-doctest >= 1 && < 1.1
 
@@ -39,12 +35,9 @@ common common-options
                        -Widentities
                        -Wincomplete-uni-patterns
                        -Wincomplete-record-updates
-  if impl(ghc >= 8.0)
-    ghc-options:       -Wredundant-constraints
-  if impl(ghc >= 8.2)
-    ghc-options:       -fhide-source-paths
-  if impl(ghc >= 8.4)
-    ghc-options:       -Wmissing-export-lists
+                       -Wredundant-constraints
+                       -fhide-source-paths
+                       -Wmissing-export-lists
                        -Wpartial-fields
   if impl(ghc >= 8.8)
     ghc-options:       -Wmissing-deriving-strategies
@@ -97,10 +90,8 @@ library
     extra-libraries:   hdf5_hl
                        hdf5
   else
-    -- On Debian or Ubuntu after installing libhdf5-dev
-    include-dirs:      /usr/include/hdf5/serial
-    extra-libraries:   hdf5_serial_hl
-                       hdf5_serial
+    pkgconfig-depends: hdf5
+    extra-libraries:   hdf5_hl
                        z
 
 executable hdf5-hs
@@ -113,8 +104,6 @@ executable hdf5-hs
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
-  if flag(in_singularity)
-    ld-options:        -static
 
 executable example00
   import:              common-options
@@ -132,8 +121,6 @@ executable example01
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
-  if flag(in_singularity)
-    ld-options:        -static
 
 executable example02
   import:              common-options
@@ -144,8 +131,6 @@ executable example02
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
-  if flag(in_singularity)
-    ld-options:        -static
 
 executable example03
   import:              common-options
@@ -156,8 +141,6 @@ executable example03
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
-  if flag(in_singularity)
-    ld-options:        -static
 
 test-suite hdf5-hs-test
   import:              common-options

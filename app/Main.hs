@@ -4,6 +4,8 @@ import Data.Complex
 import Data.HDF5
 import Data.Proxy
 import Data.Text
+import Data.Word
+import qualified Data.Vector.Storable as V
 import System.IO (IOMode (..))
 
 main :: IO ()
@@ -40,6 +42,8 @@ main = do
             blob <- readDataset @Double x
             writeDataset root "p" blob
           _ -> error "expected c to be a dataset"
+
+        writeDataset root "uint64_dataset" $ V.fromList [1 :: Word64, 2, 3]
         return ()
 
   putStrLn "Hello world!"
