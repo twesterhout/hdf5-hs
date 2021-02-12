@@ -90,9 +90,9 @@ library
     extra-libraries:   hdf5_hl
                        hdf5
   else
-    pkgconfig-depends: hdf5
     extra-libraries:   hdf5_hl
-                       z
+    pkgconfig-depends: hdf5
+                     , zlib
 
 executable hdf5-hs
   import:              common-options
