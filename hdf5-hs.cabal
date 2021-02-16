@@ -88,11 +88,14 @@ library
                      , template-haskell
   mixins:              base hiding (Prelude)
                      , relude (Relude as Prelude)
-  exposed-modules:     Data.HDF5
-                     , Data.HDF5.Internal
-                     , Data.HDF5.Types
+  exposed-modules:     Data.HDF5.Types
                      , Data.HDF5.Context
                      , Data.HDF5.Wrapper
+                     --   Data.HDF5
+                     -- , Data.HDF5.Internal
+  ghc-options:         -optc-Wall
+                       -optc-Wextra
+                       
   include-dirs:        cbits
   if os(darwin) || os(osx)
     extra-libraries:   hdf5_hl
@@ -109,6 +112,7 @@ executable hdf5-hs
   build-depends:       hdf5-hs
                      , text
                      , vector
+  buildable:           False
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
@@ -119,6 +123,7 @@ executable example00
   main-is:             example00.hs 
   build-depends:       hdf5-hs
                      , text
+  buildable:           False
 
 executable example01
   import:              common-options
@@ -129,6 +134,7 @@ executable example01
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+  buildable:           False
 
 executable example02
   import:              common-options
@@ -139,6 +145,7 @@ executable example02
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+  buildable:           False
 
 executable example03
   import:              common-options
@@ -149,12 +156,14 @@ executable example03
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+  buildable:           False
 
 executable example04
   import:              common-options
   hs-source-dirs:      example
   main-is:             example04.hs 
   build-depends:       hdf5-hs
+                     , text
   mixins:              base hiding (Prelude)
                      , relude (Relude as Prelude)
 

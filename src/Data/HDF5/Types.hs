@@ -5,6 +5,11 @@ module Data.HDF5.Types
     Group,
     Dataset,
     Datatype,
+    Dataspace (..),
+    Attribute (..),
+    ArrayView (..),
+    KnownDatatype (..),
+    KnownDataset (..),
 
     -- * Low-level types
 
@@ -23,7 +28,12 @@ module Data.HDF5.Types
   )
 where
 
+import Control.Exception.Safe
+import Data.Constraint (Dict (..))
 import Foreign.C.Types (CInt, CUInt)
+import Foreign.Marshal.Utils (with)
+import Foreign.Ptr (Ptr, castPtr)
+import Foreign.Storable
 
 type Haddr = Word64
 
@@ -66,6 +76,10 @@ data Object (k :: ObjectType) where
   Dataset :: Hid -> Object 'DatasetTy
   Datatype :: Hid -> Object 'DatatypeTy
 
+newtype Dataspace = Dataspace {unDataspace :: Hid}
+
+newtype Attribute = Attribute {unAttribute :: Hid}
+
 type File = Object 'FileTy
 
 type Group = Object 'GroupTy
@@ -84,3 +98,38 @@ instance MkObject 'GroupTy where unsafeMkObject = Group
 instance MkObject 'DatasetTy where unsafeMkObject = Dataset
 
 instance MkObject 'DatatypeTy where unsafeMkObject = Datatype
+
+peekStorable :: forall a. Storable a => Ptr () -> Int -> IO a
+peekStorable p n
+  | n == objectSize = peek $ castPtr p
+  | otherwise =
+    error $
+      "invalid buffer size: " <> show n <> "; expected " <> show objectSize
+  where
+    objectSize :: Int
+    objectSize = sizeOf dummy
+    dummy :: a
+    dummy = dummy
+
+withStorable :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
+withStorable x func = with x $ \buffer -> func (castPtr buffer) (sizeOf x)
+
+class KnownDatatype a where
+  withDatatype :: (MonadIO m, MonadMask m) => proxy a -> (Datatype -> m b) -> m b
+
+  hasStorable :: proxy a -> Maybe (Dict (Storable a))
+  hasStorable _ = Nothing
+
+  h5Peek :: Ptr () -> Int -> IO a
+  default h5Peek :: Storable a => Ptr () -> Int -> IO a
+  h5Peek = peekStorable
+
+  h5With :: a -> (Ptr () -> Int -> IO b) -> IO b
+  default h5With :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
+  h5With = withStorable
+
+data ArrayView = ArrayView !Datatype !Dataspace !(Ptr ())
+
+class KnownDataset a where
+  withArrayView :: a -> (ArrayView -> IO b) -> IO b
+  peekArrayView :: ArrayView -> IO a
