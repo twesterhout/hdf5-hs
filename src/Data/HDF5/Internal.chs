@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Data.HDF5.Internal where
 
@@ -12,9 +13,9 @@ import Foreign.Marshal.Array (allocaArray)
 import Foreign.Ptr (FunPtr, Ptr, castFunPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable (..))
 import qualified GHC.Show
-import Relude hiding (error)
 import System.IO.Unsafe (unsafePerformIO)
-import Prelude (error)
+import Prelude hiding (error)
+import qualified Prelude (error)
 
 #include <hdf5.h>
 #include <hdf5_hl.h>
@@ -32,6 +33,9 @@ type CSize = {#type size_t#}
 {#typedef hid_t Hid#}
 {#typedef htri_t Htri#}
 {#typedef hbool_t Hbool#}
+
+error :: String -> a
+error = Prelude.error . toText
 
 -- This is a trick to handle #define'd constants which include type conversions
 -- and other shenanigans. c2hs can't handle them and it feels wrong to hardcode

@@ -88,7 +88,7 @@ import Control.Exception.Safe hiding (handle)
 import Data.ByteString (packCString, useAsCString)
 import Data.Complex
 import Data.Constraint (Dict (..))
-import Data.HDF5.Internal
+import Data.HDF5.Internal hiding (error)
 import Data.Some
 import qualified Data.Text as T
 import Data.Vector.Storable (Vector)
@@ -102,9 +102,9 @@ import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullPtr)
 import Foreign.Storable (Storable (..))
 import qualified GHC.TypeLits
-import Relude hiding (find, group, withFile)
 import System.Directory (doesFileExist)
 import System.Process (callProcess)
+import Prelude hiding (find, group, withFile)
 
 -- $setup
 -- >>> import qualified Data.HDF5 as H5
@@ -606,9 +606,6 @@ withTextDatatype = bracket (liftIO acquire) close
 --
 -- We want to support text attributes which usually have variable size. Hence,
 -- just adding 'Storable' constraint is not a solution.
--- data DatatypeSize
---   = FixedSize {-# UNPACK #-} !Int
---   | VariableSize
 class KnownDatatype' a where
   withDatatype' :: (MonadIO m, MonadMask m) => proxy a -> (Datatype -> m b) -> m b
 
@@ -754,4 +751,7 @@ readAttribute object name =
           h5a_read (unAttribute attr) (getRawHandle dtype) ptr >> h5Peek ptr n
 
 sizeOf' :: forall a proxy. Storable a => proxy a -> Int
-sizeOf' _ = sizeOf (undefined :: a)
+sizeOf' _ =
+  let x :: a
+      x = x
+   in sizeOf x
