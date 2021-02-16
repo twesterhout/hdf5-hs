@@ -29,7 +29,9 @@ module Data.HDF5.Types
 where
 
 import Control.Exception.Safe
+import Control.Monad.ST (RealWorld)
 import Data.Constraint (Dict (..))
+import Data.Vector.Storable (MVector)
 import Foreign.C.Types (CInt, CUInt)
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr)
@@ -71,10 +73,10 @@ data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
 
 -- | A HDF5 object.
 data Object (k :: ObjectType) where
-  File :: Hid -> Object 'FileTy
-  Group :: Hid -> Object 'GroupTy
-  Dataset :: Hid -> Object 'DatasetTy
-  Datatype :: Hid -> Object 'DatatypeTy
+  File :: {-# UNPACK #-} !Hid -> Object 'FileTy
+  Group :: {-# UNPACK #-} !Hid -> Object 'GroupTy
+  Dataset :: {-# UNPACK #-} !Hid -> Object 'DatasetTy
+  Datatype :: {-# UNPACK #-} !Hid -> Object 'DatatypeTy
 
 newtype Dataspace = Dataspace {unDataspace :: Hid}
 
@@ -128,8 +130,8 @@ class KnownDatatype a where
   default h5With :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
   h5With = withStorable
 
-data ArrayView = ArrayView !Datatype !Dataspace !(Ptr ())
+data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 
 class KnownDataset a where
-  withArrayView :: a -> (ArrayView -> IO b) -> IO b
-  peekArrayView :: ArrayView -> IO a
+  withArrayView :: HasCallStack => a -> (ArrayView -> IO b) -> IO b
+  peekArrayView :: HasCallStack => ArrayView -> IO a
