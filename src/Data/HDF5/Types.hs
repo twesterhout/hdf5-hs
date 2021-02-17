@@ -5,6 +5,9 @@ module Data.HDF5.Types
     Group,
     Dataset,
     Datatype,
+    Handle (..),
+    rawHandle,
+    close,
     Dataspace (..),
     Attribute (..),
     ArrayView (..),
@@ -30,12 +33,14 @@ where
 
 import Control.Exception.Safe
 import Control.Monad.ST (RealWorld)
+import Control.Monad.Trans.Resource
 import Data.Constraint (Dict (..))
 import Data.Vector.Storable (MVector)
 import Foreign.C.Types (CInt, CUInt)
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr)
 import Foreign.Storable
+import Prelude hiding (Handle)
 
 type Haddr = Word64
 
@@ -71,16 +76,18 @@ data H5I_type_t
 data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
   deriving stock (Read, Show, Eq)
 
+data Handle = Handle {-# UNPACK #-} !Hid {-# UNPACK #-} !ReleaseKey
+
 -- | A HDF5 object.
 data Object (k :: ObjectType) where
-  File :: {-# UNPACK #-} !Hid -> Object 'FileTy
-  Group :: {-# UNPACK #-} !Hid -> Object 'GroupTy
-  Dataset :: {-# UNPACK #-} !Hid -> Object 'DatasetTy
-  Datatype :: {-# UNPACK #-} !Hid -> Object 'DatatypeTy
+  File :: {-# UNPACK #-} !Handle -> Object 'FileTy
+  Group :: {-# UNPACK #-} !Handle -> Object 'GroupTy
+  Dataset :: {-# UNPACK #-} !Handle -> Object 'DatasetTy
+  Datatype :: {-# UNPACK #-} !Handle -> Object 'DatatypeTy
 
-newtype Dataspace = Dataspace {unDataspace :: Hid}
+newtype Dataspace = Dataspace Handle
 
-newtype Attribute = Attribute {unAttribute :: Hid}
+newtype Attribute = Attribute Handle
 
 type File = Object 'FileTy
 
@@ -90,16 +97,39 @@ type Dataset = Object 'DatasetTy
 
 type Datatype = Object 'DatatypeTy
 
-class MkObject (t :: ObjectType) where
-  unsafeMkObject :: Hid -> Object t
+class HasRawHandle a where
+  rawHandle :: a -> Hid
 
-instance MkObject 'FileTy where unsafeMkObject = File
+instance HasRawHandle (Object t) where
+  rawHandle x = case x of
+    (File (Handle h _)) -> h
+    (Group (Handle h _)) -> h
+    (Dataset (Handle h _)) -> h
+    (Datatype (Handle h _)) -> h
 
-instance MkObject 'GroupTy where unsafeMkObject = Group
+instance HasRawHandle Dataspace where
+  rawHandle (Dataspace (Handle h _)) = h
 
-instance MkObject 'DatasetTy where unsafeMkObject = Dataset
+instance HasRawHandle Attribute where
+  rawHandle (Attribute (Handle h _)) = h
 
-instance MkObject 'DatatypeTy where unsafeMkObject = Datatype
+class CanClose a where
+  close :: MonadResource m => a -> m ()
+
+instance CanClose Dataspace where
+  close (Dataspace (Handle _ k)) = release k
+
+instance CanClose Attribute where
+  close (Attribute (Handle _ k)) = release k
+
+instance CanClose Group where
+  close (Group (Handle _ k)) = release k
+
+instance CanClose Dataset where
+  close (Dataset (Handle _ k)) = release k
+
+instance CanClose Datatype where
+  close (Datatype (Handle _ k)) = release k
 
 peekStorable :: forall a. Storable a => Ptr () -> Int -> IO a
 peekStorable p n
@@ -117,21 +147,21 @@ withStorable :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
 withStorable x func = with x $ \buffer -> func (castPtr buffer) (sizeOf x)
 
 class KnownDatatype a where
-  withDatatype :: (MonadIO m, MonadMask m) => proxy a -> (Datatype -> m b) -> m b
+  getDatatype :: MonadResource m => proxy a -> m Datatype
 
   hasStorable :: proxy a -> Maybe (Dict (Storable a))
   hasStorable _ = Nothing
 
-  h5Peek :: Ptr () -> Int -> IO a
-  default h5Peek :: Storable a => Ptr () -> Int -> IO a
-  h5Peek = peekStorable
+  peekKnown :: Ptr () -> Int -> IO a
+  default peekKnown :: Storable a => Ptr () -> Int -> IO a
+  peekKnown = peekStorable
 
-  h5With :: a -> (Ptr () -> Int -> IO b) -> IO b
-  default h5With :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
-  h5With = withStorable
+  withKnown :: a -> (Ptr () -> Int -> IO b) -> IO b
+  default withKnown :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
+  withKnown = withStorable
 
 data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 
 class KnownDataset a where
-  withArrayView :: HasCallStack => a -> (ArrayView -> IO b) -> IO b
-  peekArrayView :: HasCallStack => ArrayView -> IO a
+  withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
+  peekArrayView :: (HasCallStack, MonadResource m) => ArrayView -> m a

@@ -1,24 +1,29 @@
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import Data.HDF5 (IOMode (..), Some (..))
+import Control.Exception.Safe (assert)
 import qualified Data.HDF5 as H5
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+import Data.Text (Text)
+import Data.Vector.Storable (Vector)
+import qualified Data.Vector.Storable as V
+
+{- Reproduces "Read and write to a dataset" example from HDF5 documentation:
+   <https://raw.githubusercontent.com/HDFGroup/hdf5/develop/examples/h5_rdwt.c>
+-}
 
 main :: IO ()
-main = do
-  H5.withFile "test.h5" WriteMode $ \handle -> do
-    -- Create a dataset
-    -- H5.makeDataset handle "A" $
-    --   H5.Blob @Double [3, 3] $
-    --     [1.0, 2.0, 3.0, -2.0, 4.0, 5.0, -3.0, -5.0, 6.0]
-    -- Create a group
-    H5.makeGroup handle "g"
-  H5.withFile "test.h5" ReadMode $ \handle -> do
-    -- Iterate over "/" and print names of all elements
-    let f i (Some object) = do
-          T.putStrLn =<< H5.getName object
-          return (i + 1)
-    count <- H5.foldM f (0 :: Int) handle
-    T.putStrLn $ "'/' contains " <> T.pack (show count) <> " elements"
+main =
+  -- Open an existing file
+  H5.withFile' "dset.h5" H5.WriteAppend $ \file -> do
+    -- Write to dataset
+    H5.writeDataset file "/dset" ([4, 6] :: [Int], V.fromList @Int [1 .. 24])
+
+    -- Read from a dataset
+    dataset <- H5.openDataset @Text file "/dset"
+    (_ :: [Int], v :: Vector Int) <- H5.readDataset dataset
+
+    -- Close the dataset early. Not strictly necessary, because ResourceT monad
+    -- transformer takes care of that.
+    H5.close dataset
+
+    -- Check data
+    assert (v == V.fromList [1 .. 24]) $ return ()
