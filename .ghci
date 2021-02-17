@@ -1,0 +1,6 @@
+:set -fwarn-unused-binds -fwarn-unused-imports
+:set -fobject-code
+:set -Wno-unused-imports -Wno-unused-top-binds
+:set -isrc
+:load Data.HDF5.Wrapper
+:load Data.HDF5
