@@ -1,8 +1,8 @@
 cabal-version:       2.4
 name:                hdf5-hs
-version:             0.0.0.0
-synopsis:            Haskell bindings to HDF5 Lite interface
-description:         Haskell bindings to HDF5 Lite interface
+version:             0.1.0.0
+synopsis:            High-level Haskell bindings to HDF5 library
+description:         High-level Haskell bindings to HDF5 library
 homepage:            https://github.com/twesterhout/hdf5-hs
 bug-reports:         https://github.com/twesterhout/hdf5-hs/issues
 license:             BSD-3-Clause
@@ -74,15 +74,12 @@ common common-options
 library
   import:              common-options
   hs-source-dirs:      src
-  c-sources:           cbits/wrapper.c
-  build-tool-depends:  c2hs:c2hs >= 0.28.6
   build-depends:     , directory
                      , safe-exceptions
                      , vector
                      , bytestring
                      , text
                      , some
-                     , constraints
                      , inline-c
                      , containers
                      , template-haskell
@@ -96,8 +93,7 @@ library
                      , Data.HDF5.Wrapper
                      , Data.HDF5
                      -- , Data.HDF5.Internal
-  ghc-options:         -optc-Wall
-                       -optc-Wextra
+  cc-options:          -Wall -Wextra
   if impl(ghc >= 8.10)
     ghc-options:       -Wunused-packages
                        
@@ -183,3 +179,7 @@ test-suite doctests
   build-depends:       hdf5-hs
                      , doctest
   hs-source-dirs:      test
+  -- We get some warnings from automatically generated files
+  ghc-options:         -Wno-missing-export-lists
+  if impl(ghc >= 8.8)
+    ghc-options:       -Wno-missing-deriving-strategies

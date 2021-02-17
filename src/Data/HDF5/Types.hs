@@ -31,15 +31,10 @@ module Data.HDF5.Types
   )
 where
 
-import Control.Exception.Safe
 import Control.Monad.ST (RealWorld)
 import Control.Monad.Trans.Resource
-import Data.Constraint (Dict (..))
 import Data.Vector.Storable (MVector)
 import Foreign.C.Types (CInt, CUInt)
-import Foreign.Marshal.Utils (with)
-import Foreign.Ptr (Ptr, castPtr)
-import Foreign.Storable
 import Prelude hiding (Handle)
 
 type Haddr = Word64
@@ -130,21 +125,6 @@ instance CanClose Dataset where
 
 instance CanClose Datatype where
   close (Datatype (Handle _ k)) = release k
-
-peekStorable :: forall a. Storable a => Ptr () -> Int -> IO a
-peekStorable p n
-  | n == objectSize = peek $ castPtr p
-  | otherwise =
-    error $
-      "invalid buffer size: " <> show n <> "; expected " <> show objectSize
-  where
-    objectSize :: Int
-    objectSize = sizeOf dummy
-    dummy :: a
-    dummy = dummy
-
-withStorable :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
-withStorable x func = with x $ \buffer -> func (castPtr buffer) (sizeOf x)
 
 class KnownDatatype a where
   ofType :: MonadResource m => m Datatype

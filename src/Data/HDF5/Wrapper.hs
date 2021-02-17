@@ -62,6 +62,7 @@ module Data.HDF5.Wrapper
     -- * Helpers
     checkError,
     fromHtri,
+    H5Exception (..),
   )
 where
 
@@ -69,10 +70,8 @@ import Control.Exception.Safe
 import Control.Monad.Trans.Resource
 import qualified Data.ByteString as B
 import Data.Complex
-import Data.Constraint
 import Data.HDF5.Context
 import Data.HDF5.Types
-import qualified Data.List as L
 import Data.Vector.Storable (Vector)
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.ByteString
@@ -81,8 +80,8 @@ import Foreign.C.String (CString)
 import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
 import Foreign.Marshal.Alloc (allocaBytes)
 import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
-import Foreign.Marshal.Utils (toBool, with)
-import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullPtr)
+import Foreign.Marshal.Utils (toBool)
+import Foreign.Ptr (FunPtr, Ptr, freeHaskellFunPtr, nullPtr)
 import Foreign.Storable
 import qualified GHC.Show
 import GHC.Stack
@@ -789,12 +788,15 @@ toUnsigned x
   | x < 0 = error $ "negative size or stride: " <> show x
   | otherwise = fromIntegral x
 
+{-
 simpleStrides :: [Int] -> [Int]
 simpleStrides = drop 1 . foldr acc [1]
   where
     acc x (y : ys) = let !r = x * y in (r : y : ys)
     acc _ _ = error "bug: this should never happen"
+-}
 
+{-
 getMaxDims :: [Int] -> [Int] -> [Int]
 getMaxDims dims strides
   | length dims == length strides = foldr acc [] $ zipWith (*) dims strides
@@ -802,6 +804,7 @@ getMaxDims dims strides
   where
     acc x (y : ys) = let !r = x `div` y in (r : y : ys)
     acc x [] = [x]
+-}
 
 -- }}}
 ----------------------------------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Control.Monad (join)
 import qualified Data.HDF5 as H5
 
 {- Reproduces "Create a dataset" example from HDF5 documentation:

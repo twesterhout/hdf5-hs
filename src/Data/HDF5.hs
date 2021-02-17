@@ -34,32 +34,18 @@ module Data.HDF5
     close,
     delete,
     deleteAttribute,
+    H5Exception (..),
   )
 where
 
 import Control.Exception.Safe hiding (handle)
 import Control.Monad.IO.Unlift
 import Control.Monad.Trans.Resource
-import Data.ByteString (packCString, useAsCString)
-import Data.Complex
-import Data.Constraint (Dict (..))
 import Data.HDF5.Types
 import Data.HDF5.Wrapper
 import Data.Some
 import qualified Data.Text as T
-import Data.Vector.Storable (Vector)
-import qualified Data.Vector.Storable as V
-import qualified Data.Vector.Storable.Mutable as MV
-import Foreign.C.String (peekCString)
-import Foreign.C.Types (CChar)
-import Foreign.Marshal.Alloc (alloca, allocaBytes)
-import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
-import Foreign.Marshal.Utils (with)
-import Foreign.Ptr (Ptr, castPtr, nullPtr)
-import Foreign.Storable (Storable (..))
-import qualified GHC.TypeLits
 import System.Directory (doesFileExist)
--- import System.Process (callProcess)
 import Prelude hiding (Handle, find, first, group, withFile)
 
 -- $setup

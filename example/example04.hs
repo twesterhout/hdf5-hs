@@ -1,6 +1,4 @@
 import qualified Data.HDF5 as H5
-import Data.Text (Text)
-import qualified Data.Vector.Storable as V
 
 main :: IO ()
 main =

@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import qualified Data.HDF5 as H5
-import Data.Text (Text)
 
 main :: IO ()
 main =
