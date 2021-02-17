@@ -16,7 +16,7 @@ module Data.HDF5
   ( withFile,
     withFile',
     AccessFlags (..),
-    makeGroup,
+    createGroup,
     openGroup,
     openDataset,
     openObject,
@@ -124,8 +124,8 @@ withFile' ::
 withFile' path flags action = withFile path flags $ \file ->
   forceGroup file >>= action
 
-makeGroup :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
-makeGroup parent path = liftIO $ h5g_create (rawHandle parent) path
+createGroup :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
+createGroup parent path = liftIO $ h5g_create (rawHandle parent) path
 
 class IsIndex i where
   openObject :: (HasCallStack, MonadResource m) => Group -> i -> m (Some Object)
@@ -183,9 +183,6 @@ readDataset dataset = h5d_read dataset
 
 ofShape :: MonadResource m => [Int] -> m Dataspace
 ofShape shape = simpleDataspace shape
-
-ofType :: forall a m. (KnownDatatype a, MonadResource m) => m Datatype
-ofType = getDatatype (Proxy @a)
 
 -- (a -> m b) -> m a -> m b
 -- (a -> b -> m c) -> m a -> m b -> m c
@@ -250,16 +247,16 @@ existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
 existsAttribute object name = liftIO $ h5a_exists (rawHandle object) name
 
 readAttribute ::
-  (HasCallStack, KnownDatatype a, MonadIO m) =>
+  (HasCallStack, KnownDataset a, MonadResource m) =>
   Object t ->
   Text ->
   m a
-readAttribute object name = liftIO $ h5a_read (rawHandle object) name
+readAttribute object name = h5a_read (rawHandle object) name
 
 writeAttribute ::
-  (HasCallStack, KnownDatatype a, MonadIO m) =>
+  (HasCallStack, KnownDataset a, MonadResource m) =>
   Object t ->
   Text ->
   a ->
   m ()
-writeAttribute object name value = liftIO $ h5a_write (rawHandle object) name value
+writeAttribute object name value = h5a_write (rawHandle object) name value

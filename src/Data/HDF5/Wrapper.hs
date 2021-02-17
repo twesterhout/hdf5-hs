@@ -75,9 +75,10 @@ import Data.HDF5.Types
 import qualified Data.List as L
 import Data.Vector.Storable (Vector)
 import qualified Data.Vector.Storable as V
+import Data.Vector.Storable.ByteString
 import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (CString)
-import Foreign.C.Types (CChar, CUInt)
+import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
 import Foreign.Marshal.Alloc (allocaBytes)
 import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
 import Foreign.Marshal.Utils (toBool, with)
@@ -494,7 +495,7 @@ getComplexDatatype dtype = do
   allocate acq rel >>= \case
     (k, h) -> return $ Datatype (Handle h k)
 
-createTextDatatype :: IO Hid
+createTextDatatype :: HasCallStack => IO Hid
 createTextDatatype =
   checkError
     =<< [C.block| hid_t {
@@ -511,64 +512,137 @@ createTextDatatype =
       return status;
   } |]
 
-getTextDatatype :: MonadResource m => m Datatype
-getTextDatatype = do
-  let acq = liftIO createTextDatatype
-      rel = liftIO . h5o_close
-  allocate acq rel >>= \case
+getTextDatatype :: (HasCallStack, MonadResource m) => m Datatype
+getTextDatatype =
+  allocate (liftIO createTextDatatype) (liftIO . h5o_close) >>= \case
     (k, h) -> return $ Datatype (Handle h k)
 
-instance KnownDatatype Int where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_INT64
-  hasStorable _ = Just Dict
+withArrayViewStorable :: forall a m b. (Storable a, KnownDatatype a, MonadResource m) => a -> (ArrayView -> m b) -> m b
+withArrayViewStorable x action = do
+  dtype <- ofType @a
+  dspace <- scalarDataspace
+  buffer <- liftIO . V.unsafeThaw . V.singleton $ x
+  r <- action (ArrayView dtype dspace (MV.unsafeCast buffer))
+  close dspace
+  close dtype
+  return r
 
-instance KnownDatatype Int32 where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_INT32
-  hasStorable _ = Just Dict
+peekArrayViewStorable :: forall a m. (HasCallStack, Storable a, KnownDatatype a, MonadResource m) => ArrayView -> m a
+peekArrayViewStorable (ArrayView dtype dspace buffer) = do
+  ofType @a >>= \object_dtype ->
+    checkDatatype object_dtype dtype >> close object_dtype
+  scalarDataspace >>= \object_dspace -> do
+    isSame <- h5s_extent_equal object_dspace dspace
+    unless isSame $
+      error "dataspace extents do not match; expected a scalar dataspace"
+    close object_dspace
+  liftIO $ MV.read (MV.unsafeCast buffer) 0
 
-instance KnownDatatype Int64 where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_INT64
-  hasStorable _ = Just Dict
+instance KnownDatatype Int32 where ofType = getStaticDatatype h5t_NATIVE_INT32
 
-instance KnownDatatype Word32 where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_UINT32
-  hasStorable _ = Just Dict
+instance KnownDatatype Int64 where ofType = getStaticDatatype h5t_NATIVE_INT64
 
-instance KnownDatatype Word64 where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_UINT64
-  hasStorable _ = Just Dict
+instance KnownDatatype Int where ofType = ofType @Int64
 
-instance KnownDatatype Float where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_FLOAT
-  hasStorable _ = Just Dict
+instance KnownDatatype Word32 where ofType = getStaticDatatype h5t_NATIVE_UINT32
 
-instance KnownDatatype Double where
-  getDatatype _ = getStaticDatatype h5t_NATIVE_DOUBLE
-  hasStorable _ = Just Dict
+instance KnownDatatype Word64 where ofType = getStaticDatatype h5t_NATIVE_UINT64
 
-instance KnownDatatype (Complex Float) where
-  getDatatype _ = getDatatype (Proxy @Float) >>= getComplexDatatype
-  hasStorable _ = Just Dict
+instance KnownDatatype CFloat where ofType = getStaticDatatype h5t_NATIVE_FLOAT
 
-instance KnownDatatype (Complex Double) where
-  getDatatype _ = getDatatype (Proxy @Double) >>= getComplexDatatype
-  hasStorable _ = Just Dict
+instance KnownDatatype Float where ofType = ofType @CFloat
 
-instance KnownDatatype ByteString where
-  getDatatype _ = getTextDatatype
-  peekKnown p n
-    | n == pointerSize = peek (castPtr p :: Ptr (Ptr CChar)) >>= B.packCString
-    | otherwise =
-      error $
-        "expected a buffer of length " <> show pointerSize <> " for variable-length string"
-    where
-      pointerSize = sizeOf (nullPtr :: Ptr CChar)
-  withKnown x func = B.useAsCString x $ \p -> with p $ \p' -> func (castPtr p') (sizeOf p)
+instance KnownDatatype CDouble where ofType = getStaticDatatype h5t_NATIVE_DOUBLE
 
-instance KnownDatatype Text where
-  getDatatype _ = getTextDatatype
-  peekKnown p n = (decodeUtf8 :: ByteString -> Text) <$> peekKnown p n
-  withKnown x = withKnown (encodeUtf8 x :: ByteString)
+instance KnownDatatype Double where ofType = ofType @CDouble
+
+instance KnownDatatype a => KnownDatatype (Complex a) where ofType = getComplexDatatype =<< ofType @a
+
+instance KnownDatatype Text where ofType = getTextDatatype
+
+instance KnownDatatype String where ofType = getTextDatatype
+
+instance KnownDatatype ByteString where ofType = getTextDatatype
+
+instance KnownDataset Int32 where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Int64 where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Int where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Word32 where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Word64 where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset CFloat where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Float where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset CDouble where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset Double where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset (Complex CFloat) where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset (Complex Float) where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset (Complex CDouble) where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+instance KnownDataset (Complex Double) where
+  withArrayView = withArrayViewStorable
+  peekArrayView = peekArrayViewStorable
+
+withArrayViewString :: (HasCallStack, MonadResource m) => ByteString -> (ArrayView -> m b) -> m b
+withArrayViewString x action = do
+  dtype <- getTextDatatype
+  dspace <- scalarDataspace
+  buffer <- liftIO . V.unsafeThaw $ byteStringToVector x
+  r <- action (ArrayView dtype dspace buffer)
+  close dspace
+  close dtype
+  return r
+
+peekArrayViewString :: (HasCallStack, MonadResource m) => ArrayView -> m ByteString
+peekArrayViewString (ArrayView dtype dspace buffer) = do
+  getTextDatatype >>= \object_dtype ->
+    checkDatatype object_dtype dtype >> close object_dtype
+  scalarDataspace >>= \object_dspace -> do
+    isSame <- h5s_extent_equal object_dspace dspace
+    unless isSame $ error "dataspace extents do not match; expected a scalar dataspace"
+    close object_dspace
+  liftIO $ vectorToByteString <$> V.unsafeFreeze buffer
+
+instance KnownDataset ByteString where
+  withArrayView = withArrayViewString
+  peekArrayView = peekArrayViewString
+
+instance KnownDataset Text where
+  withArrayView x = withArrayViewString (encodeUtf8 x :: ByteString)
+  peekArrayView = (return . decodeUtf8) <=< peekArrayViewString
 
 h5t_equal :: HasCallStack => Datatype -> Datatype -> IO Bool
 h5t_equal dtype1 dtype2 = fromHtri =<< [C.exp| htri_t { H5Tequal($(hid_t h1), $(hid_t h2)) } |]
@@ -652,6 +726,14 @@ simpleDataspace :: MonadResource m => [Int] -> m Dataspace
 simpleDataspace sizes =
   allocate (liftIO $ createSimpleDataspace sizes) (liftIO . h5s_close) >>= \case
     (k, h) -> return $ Dataspace (Handle h k)
+
+h5s_extent_equal :: (HasCallStack, MonadIO m) => Dataspace -> Dataspace -> m Bool
+h5s_extent_equal dspace1 dspace2 = do
+  let c_dspace1 = rawHandle dspace1
+      c_dspace2 = rawHandle dspace2
+  liftIO $
+    fromHtri
+      =<< [CU.exp| htri_t { H5Sextent_equal($(hid_t c_dspace1), $(hid_t c_dspace2)) } |]
 
 h5s_get_simple_extent_ndims :: HasCallStack => Dataspace -> IO Int
 h5s_get_simple_extent_ndims dspace =
@@ -754,6 +836,12 @@ h5d_get_type dataset = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } 
   where
     h = rawHandle dataset
 
+bufferSizeFor :: MonadIO m => Datatype -> Dataspace -> m Int
+bufferSizeFor dtype dspace =
+  liftIO $
+    (*) <$> (product <$> h5s_get_simple_extent_dims dspace)
+      <*> (h5t_get_size dtype)
+
 h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 h5d_read dataset = do
   dtype <-
@@ -762,10 +850,7 @@ h5d_read dataset = do
   dspace <-
     allocate (liftIO $ h5d_get_space dataset) (liftIO . h5s_close) >>= \case
       (k, v) -> return $ Dataspace (Handle v k)
-  sizeInBytes <-
-    liftIO $
-      (*) <$> (product <$> h5s_get_simple_extent_dims dspace)
-        <*> (h5t_get_size dtype)
+  sizeInBytes <- bufferSizeFor dtype dspace
   buffer <- liftIO $ MV.unsafeNew sizeInBytes
   let c_dataset = rawHandle dataset
       c_dtype = rawHandle dtype
@@ -809,24 +894,26 @@ instance (Storable a, KnownDatatype a) => KnownDataset (Vector a) where
 
 instance (Storable a, KnownDatatype a) => KnownDataset ([Int], Vector a) where
   withArrayView (dims, v) action = do
-    dtype <- getDatatype (Proxy @a)
+    dtype <- ofType @a
     dspace <- simpleDataspace dims
     buffer <- liftIO $ V.unsafeThaw v
-    action (ArrayView dtype dspace (MV.unsafeCast buffer))
-  peekArrayView (ArrayView dtype dspace buffer) = liftIO $ do
-    runResourceT $
-      getDatatype (Proxy @a) >>= \object_dtype ->
-        liftIO $ checkDatatype object_dtype dtype
-    dims <- h5s_get_simple_extent_dims dspace
-    size <- h5t_get_size dtype
-    unless (product dims * size == MV.length buffer) . error $
+    r <- action (ArrayView dtype dspace (MV.unsafeCast buffer))
+    close dspace
+    close dtype
+    return r
+  peekArrayView (ArrayView dtype dspace buffer) = do
+    ofType @a >>= \object_dtype ->
+      checkDatatype object_dtype dtype >> close object_dtype
+    dims <- liftIO $ h5s_get_simple_extent_dims dspace
+    sizeInBytes <- bufferSizeFor dtype dspace
+    unless (sizeInBytes == MV.length buffer) . error $
       "bug: buffer has wrong length: "
         <> show (MV.length buffer)
-        <> "; dataspace has shape "
+        <> "; expected "
+        <> show sizeInBytes
+        <> " for array of shape "
         <> show dims
-        <> ", element size is "
-        <> show size
-    v <- V.unsafeFreeze $ MV.unsafeCast buffer
+    v <- liftIO . V.unsafeFreeze $ MV.unsafeCast buffer
     return (dims, v)
 
 -- }}}
@@ -834,92 +921,91 @@ instance (Storable a, KnownDatatype a) => KnownDataset ([Int], Vector a) where
 -- Attributes
 ----------------------------------------------------------------------------------------------------
 -- {{{
-h5a_open :: Hid -> Text -> IO Hid
-h5a_open object name = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-ptr:c_name, H5P_DEFAULT) } |]
-  where
-    c_name = encodeUtf8 name
-
-h5a_create :: Hid -> Text -> Datatype -> IO Hid
-h5a_create object name dtype =
-  runResourceT $ do
-    dspace <- scalarDataspace
-    let c_name = encodeUtf8 name
-        c_dtype = rawHandle dtype
-        c_dspace = rawHandle dspace
-    liftIO $
-      checkError
-        =<< [C.exp| hid_t {
-              H5Acreate($(hid_t object), $bs-ptr:c_name,
-                        $(hid_t c_dtype), $(hid_t c_dspace),
-                        H5P_DEFAULT, H5P_DEFAULT)
-            } |]
-  where
-
 h5a_close :: HasCallStack => Hid -> IO ()
 h5a_close attr = void . checkError =<< [C.exp| herr_t { H5Aclose($(hid_t attr)) } |]
 
-h5a_get_type :: HasCallStack => Attribute -> IO Hid
-h5a_get_type attr = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
+h5a_open :: (HasCallStack, MonadResource m) => Hid -> Text -> m Attribute
+h5a_open object name =
+  allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
+    (k, v) -> return . Attribute $ Handle v k
   where
+    c_name = encodeUtf8 name
+    acquire = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-ptr:c_name, H5P_DEFAULT) } |]
+
+h5a_create :: (HasCallStack, MonadResource m) => Hid -> Text -> Datatype -> Dataspace -> m Attribute
+h5a_create object name dtype dspace = do
+  let c_name = encodeUtf8 name
+      c_dtype = rawHandle dtype
+      c_dspace = rawHandle dspace
+      acquire =
+        checkError
+          =<< [C.exp| hid_t {
+                H5Acreate($(hid_t object), $bs-ptr:c_name,
+                          $(hid_t c_dtype), $(hid_t c_dspace),
+                          H5P_DEFAULT, H5P_DEFAULT)
+              } |]
+  allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
+    (k, v) -> return . Attribute $ Handle v k
+
+h5a_get_type :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
+h5a_get_type attr =
+  allocate (liftIO acquire) (liftIO . h5o_close) >>= \case
+    (k, v) -> return . Datatype $ Handle v k
+  where
+    acquire = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
     h = rawHandle attr
 
-h5a_read :: forall a. (HasCallStack, KnownDatatype a) => Hid -> Text -> IO a
-h5a_read object name = runResourceT $ do
-  attr <-
-    allocate (liftIO $ h5a_open object name) (liftIO . h5a_close) >>= \case
-      (k, v) -> return $ Attribute (Handle v k)
-  attr_dtype <-
-    allocate (liftIO $ h5a_get_type attr) (liftIO . h5o_close) >>= \case
-      (k, v) -> return $ Datatype (Handle v k)
-  object_dtype <- getDatatype (Proxy @a)
-  liftIO $
-    h5t_equal attr_dtype object_dtype >>= \case
-      True ->
-        h5t_get_size object_dtype >>= \objectSize ->
-          allocaBytes objectSize $ \buffer -> do
-            let c_attr = rawHandle attr
-                c_object_dtype = rawHandle object_dtype
-            [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_object_dtype), $(void* buffer)) } |]
-              >>= checkError >> peekKnown buffer objectSize
-      False -> do
-        name1 <- h5hl_dtype_to_text object_dtype
-        name2 <- h5hl_dtype_to_text attr_dtype
-        error $
-          "tried to read attribute of type "
-            <> name1
-            <> ", but the attribute in file has type "
-            <> name2
+h5a_get_space :: (HasCallStack, MonadResource m) => Attribute -> m Dataspace
+h5a_get_space attr =
+  allocate (liftIO acquire) (liftIO . h5s_close) >>= \case
+    (k, v) -> return . Dataspace $ Handle v k
+  where
+    acquire = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
+    h = rawHandle attr
 
-h5a_write :: forall a. (HasCallStack, KnownDatatype a) => Hid -> Text -> a -> IO ()
-h5a_write object name value = runResourceT $ do
-  object_dtype <- getDatatype (Proxy @a)
-  alreadyExists <- liftIO $ h5a_exists object name
-  let acquire =
-        if alreadyExists
-          then h5a_open object name
-          else h5a_create object name object_dtype
-  attr <-
-    allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
-      (k, v) -> return $ Attribute (Handle v k)
-  attr_dtype <-
-    allocate (liftIO $ h5a_get_type attr) (liftIO . h5o_close) >>= \case
-      (k, v) -> return $ Datatype (Handle v k)
-  liftIO $
-    h5t_equal attr_dtype object_dtype >>= \case
-      True -> do
-        let c_attr = rawHandle attr
-            c_object_dtype = rawHandle object_dtype
-        withKnown value $ \buffer _ ->
-          [C.exp| herr_t { H5Awrite($(hid_t c_attr), $(hid_t c_object_dtype), $(void* buffer)) } |]
-            >>= checkError >> return ()
-      False -> do
-        name1 <- h5hl_dtype_to_text object_dtype
-        name2 <- h5hl_dtype_to_text attr_dtype
-        error $
-          "tried to write attribute of type "
-            <> name1
-            <> ", but the attribute in file has type "
-            <> name2
+h5a_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> m a
+h5a_read object name = do
+  attr <- h5a_open object name
+  dtype <- h5a_get_type attr
+  dspace <- h5a_get_space attr
+  buffer <- liftIO . MV.unsafeNew =<< bufferSizeFor dtype dspace
+  close dspace
+  let c_attr = rawHandle attr
+      c_dtype = rawHandle dtype
+  !_ <- liftIO $
+    MV.unsafeWith buffer $ \bufferPtr ->
+      checkError
+        =<< [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_dtype), (void*)$(uint8_t* bufferPtr)) } |]
+  value <- peekArrayView $ ArrayView dtype dspace buffer
+  close dtype
+  close attr
+  return value
+
+h5a_write :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> a -> m ()
+h5a_write object name value =
+  withArrayView value $ \(ArrayView object_dtype object_dspace buffer) -> do
+    alreadyExists <- liftIO $ h5a_exists object name
+    unless alreadyExists $
+      h5a_create object name object_dtype object_dspace >>= close
+    attr <- h5a_open object name
+    h5a_get_type attr >>= \attr_dtype ->
+      checkDatatype object_dtype attr_dtype >> close attr_dtype
+    h5a_get_space attr >>= \attr_dspace -> do
+      isSame <- h5s_extent_equal object_dspace attr_dspace
+      unless isSame $ do
+        object_dims <- liftIO $ h5s_get_simple_extent_dims object_dspace
+        attr_dims <- liftIO $ h5s_get_simple_extent_dims attr_dspace
+        error $ "dataspace extents do not match: " <> show object_dims <> " != " <> show attr_dims
+      close attr_dspace
+    let c_attr = rawHandle attr
+        c_object_dtype = rawHandle object_dtype
+    _ <- liftIO $
+      MV.unsafeWith buffer $ \bufferPtr ->
+        checkError
+          =<< [C.exp| herr_t { H5Awrite($(hid_t c_attr), $(hid_t c_object_dtype),
+                                        (void const*)$(uint8_t const* bufferPtr)) } |]
+    close attr
+    return ()
 
 h5a_exists :: HasCallStack => Hid -> Text -> IO Bool
 h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object), $bs-ptr:c_name) } |]

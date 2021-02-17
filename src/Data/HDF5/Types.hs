@@ -147,18 +147,7 @@ withStorable :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
 withStorable x func = with x $ \buffer -> func (castPtr buffer) (sizeOf x)
 
 class KnownDatatype a where
-  getDatatype :: MonadResource m => proxy a -> m Datatype
-
-  hasStorable :: proxy a -> Maybe (Dict (Storable a))
-  hasStorable _ = Nothing
-
-  peekKnown :: Ptr () -> Int -> IO a
-  default peekKnown :: Storable a => Ptr () -> Int -> IO a
-  peekKnown = peekStorable
-
-  withKnown :: a -> (Ptr () -> Int -> IO b) -> IO b
-  default withKnown :: Storable a => a -> (Ptr () -> Int -> IO b) -> IO b
-  withKnown = withStorable
+  ofType :: MonadResource m => m Datatype
 
 data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 
