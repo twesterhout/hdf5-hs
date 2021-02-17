@@ -2,7 +2,6 @@
 
 import Control.Exception.Safe (assert)
 import qualified Data.HDF5 as H5
-import Data.Text (Text)
 import Data.Vector.Storable (Vector)
 import qualified Data.Vector.Storable as V
 
