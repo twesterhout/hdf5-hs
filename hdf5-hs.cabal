@@ -171,6 +171,7 @@ test-suite hdf5-hs-test
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N
+  buildable:           True
 
 test-suite doctests
   import:              common-options
@@ -183,3 +184,4 @@ test-suite doctests
   ghc-options:         -Wno-missing-export-lists
   if impl(ghc >= 8.8)
     ghc-options:       -Wno-missing-deriving-strategies
+  buildable:           False
