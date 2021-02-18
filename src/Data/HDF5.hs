@@ -41,6 +41,8 @@ module Data.HDF5
     delete,
     deleteAttribute,
     H5Exception (..),
+    TemporaryContiguousArray (..),
+    TemporaryStridedMatrix (..),
   )
 where
 

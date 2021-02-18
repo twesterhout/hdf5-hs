@@ -50,6 +50,8 @@ module Data.HDF5.Wrapper
     h5d_get_type,
     h5d_read,
     h5d_write,
+    TemporaryContiguousArray (..),
+    TemporaryStridedMatrix (..),
 
     -- * Attributes
     h5a_open,
@@ -889,18 +891,27 @@ instance (Storable a, KnownDatatype a) => KnownDataset [a] where
   peekArrayView view = V.toList <$> peekArrayView view
 
 instance (Storable a, KnownDatatype a) => KnownDataset (Vector a) where
-  withArrayView v = withArrayView ([V.length v], v)
+  withArrayView v = withArrayView $ TemporaryContiguousArray [V.length v] v
   peekArrayView view =
-    peekArrayView view >>= \case
-      ([_], v) -> return v
-      (dims :: [Int], _) -> error $ "invalid shape: " <> show dims <> "; expected a one-dimensional array"
+    peekArrayView view
+      >>= \case
+        (TemporaryContiguousArray [n] v) -> assert (V.length v == n) $ return v
+        (TemporaryContiguousArray shape _) ->
+          error $
+            "array has wrong shape: " <> show shape <> "; expected a one-dimensional array"
 
-instance (Storable a, KnownDatatype a) => KnownDataset ([Int], Vector a) where
-  withArrayView (dims, v) action = do
+data TemporaryContiguousArray a = TemporaryContiguousArray ![Int] !(Vector a)
+
+instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryContiguousArray a) where
+  withArrayView (TemporaryContiguousArray shape v) action = do
+    when (any (< 0) shape) . error $
+      "invalid shape: " <> show shape
+    when (V.length v < product shape) . error $
+      "buffer is too short (" <> show (V.length v) <> " elements) for array of shape " <> show shape
     dtype <- ofType @a
-    dspace <- simpleDataspace dims
+    dspace <- simpleDataspace shape
     buffer <- liftIO $ V.unsafeThaw v
-    r <- action (ArrayView dtype dspace (MV.unsafeCast buffer))
+    r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
     close dspace
     close dtype
     return r
@@ -910,14 +921,54 @@ instance (Storable a, KnownDatatype a) => KnownDataset ([Int], Vector a) where
     dims <- liftIO $ h5s_get_simple_extent_dims dspace
     sizeInBytes <- bufferSizeFor dtype dspace
     unless (sizeInBytes == MV.length buffer) . error $
-      "bug: buffer has wrong length: "
+      "bug: buffer has wrong size: "
         <> show (MV.length buffer)
-        <> "; expected "
+        <> " bytes; expected "
         <> show sizeInBytes
         <> " for array of shape "
         <> show dims
     v <- liftIO . V.unsafeFreeze $ MV.unsafeCast buffer
-    return (dims, v)
+    return $ TemporaryContiguousArray dims v
+
+data TemporaryStridedMatrix a = TemporaryStridedMatrix !(Int, Int) !Int !(Vector a)
+
+instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryStridedMatrix a) where
+  withArrayView (TemporaryStridedMatrix (d₀, d₁) s₀ v) action = do
+    when (d₀ < 0 || d₁ < 0 || s₀ < 0) . error $
+      "negative dimension or stride: " <> show (d₀, d₁) <> " " <> show s₀
+    when (s₀ < d₁) . error $
+      "invalid stride along the first dimension: " <> show s₀
+    when (V.length v < d₀ * s₀) . error $
+      "buffer is too short ("
+        <> show (V.length v)
+        <> " elements) for the bounding array of shape "
+        <> show (d₀, s₀)
+    dtype <- ofType @a
+    dspace <- simpleDataspace [d₀, s₀]
+    liftIO $ h5s_select_hyperslab dspace [0, 0] [1, 1] [d₀, d₁]
+    buffer <- liftIO $ V.unsafeThaw v
+    r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
+    close dspace
+    close dtype
+    return r
+  peekArrayView view =
+    peekArrayView view >>= \case
+      (TemporaryContiguousArray [d₀, d₁] v) ->
+        assert (V.length v == d₀ * d₁) . return $
+          TemporaryStridedMatrix (d₀, d₁) d₁ v
+      (TemporaryContiguousArray shape _) ->
+        error $
+          "array has wrong shape: " <> show shape <> "; expected a matrix"
+
+{-
+getMaxDims :: [Int] -> [Int] -> [Int]
+getMaxDims dims strides
+  | length dims == length strides = foldr acc [] $ zipWith (*) dims strides
+  | otherwise = error "lengths of dims and strides do not match"
+  where
+    acc x (y : ys) = let !r = x `div` y in (r : y : ys)
+    acc x [] = [x]
+-}
 
 -- }}}
 ----------------------------------------------------------------------------------------------------

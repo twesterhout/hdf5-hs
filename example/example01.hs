@@ -14,11 +14,12 @@ main =
   -- Open an existing file
   H5.withFile' "dset.h5" H5.WriteAppend $ \file -> do
     -- Write to dataset
-    H5.writeDataset file "/dset" ([4, 6] :: [Int], V.fromList @Int [1 .. 24])
+    H5.writeDataset file "/dset" $
+      H5.TemporaryContiguousArray [4, 6] (V.fromList @Int [1 .. 24])
 
     -- Read from a dataset
     dataset <- H5.openDataset @Text file "/dset"
-    (_ :: [Int], v :: Vector Int) <- H5.readDataset dataset
+    (H5.TemporaryContiguousArray _ (v :: Vector Int)) <- H5.readDataset dataset
 
     -- Close the dataset early. Not strictly necessary, because ResourceT monad
     -- transformer takes care of that.
