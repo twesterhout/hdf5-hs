@@ -41,8 +41,12 @@ module Data.HDF5
     delete,
     deleteAttribute,
     H5Exception (..),
+    KnownDatatype (..),
+    KnownDataset (..),
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
+    ArrayView (..),
+    MonadResource,
   )
 where
 
