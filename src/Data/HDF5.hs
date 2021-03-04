@@ -35,6 +35,7 @@ module Data.HDF5
     Attribute,
     readAttribute,
     writeAttribute,
+    getName,
     exists,
     existsAttribute,
     close,

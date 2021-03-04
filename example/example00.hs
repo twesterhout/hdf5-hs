@@ -9,7 +9,7 @@ import qualified Data.HDF5 as H5
 main :: IO ()
 main =
   -- Create a new file
-  H5.withFile' "dset.h5" H5.WriteTruncate $ \file -> do
+  H5.withFile' "dset.h5" H5.WriteTruncate $ \file ->
     -- Create a dataset
     join $
       H5.createDataset file "/dset"
