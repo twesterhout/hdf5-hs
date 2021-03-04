@@ -233,7 +233,10 @@ h5f_open filename flags = do
 h5f_create :: HasCallStack => Text -> AccessFlags -> IO Hid
 h5f_create filename flags = do
   let c_filename = encodeUtf8 filename
-      c_flags = accessFlagsToUInt flags
+      c_flags = case flags of
+        ReadOnly -> error "cannot create a file with ReadOnly access mode, use WriteTruncate instead"
+        WriteAppend -> accessFlagsToUInt WriteTruncate
+        WriteTruncate -> accessFlagsToUInt WriteTruncate
   checkError =<< [CU.exp| hid_t { H5Fcreate($bs-ptr:c_filename, $(unsigned int c_flags), H5P_DEFAULT, H5P_DEFAULT) } |]
 
 -- | Close a file.
