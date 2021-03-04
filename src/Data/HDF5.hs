@@ -48,6 +48,7 @@ module Data.HDF5
     TemporaryStridedMatrix (..),
     ArrayView (..),
     MonadResource,
+    disableDiagOutput,
   )
 where
 

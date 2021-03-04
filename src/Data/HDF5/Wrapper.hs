@@ -3,7 +3,9 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.HDF5.Wrapper
-  ( -- * Files
+  ( disableDiagOutput,
+
+    -- * Files
     h5f_open,
     h5f_create,
     h5f_close,
@@ -112,6 +114,9 @@ instance CheckError' Herr () where
   checkError' !x
     | x < 0 = error $ "HDF5 failed with error code " <> show x
     | otherwise = ()
+
+disableDiagOutput :: IO ()
+disableDiagOutput = checkError' <$> [CU.exp| herr_t { H5Eset_auto(H5E_DEFAULT, NULL, NULL) } |]
 
 data ErrorInfo = ErrorInfo !Text !Text !Int !Text
 
