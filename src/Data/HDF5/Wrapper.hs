@@ -227,7 +227,7 @@ h5f_open :: HasCallStack => Text -> AccessFlags -> IO Hid
 h5f_open filename flags = do
   let c_filename = encodeUtf8 filename
       c_flags = accessFlagsToUInt flags
-  checkError =<< [CU.exp| hid_t { H5Fopen($bs-ptr:c_filename, $(unsigned int c_flags), H5P_DEFAULT) } |]
+  checkError =<< [CU.exp| hid_t { H5Fopen($bs-cstr:c_filename, $(unsigned int c_flags), H5P_DEFAULT) } |]
 
 -- | Create a new HDF5 file.
 h5f_create :: HasCallStack => Text -> AccessFlags -> IO Hid
@@ -237,7 +237,7 @@ h5f_create filename flags = do
         ReadOnly -> error "cannot create a file with ReadOnly access mode, use WriteTruncate instead"
         WriteAppend -> accessFlagsToUInt WriteTruncate
         WriteTruncate -> accessFlagsToUInt WriteTruncate
-  checkError =<< [CU.exp| hid_t { H5Fcreate($bs-ptr:c_filename, $(unsigned int c_flags), H5P_DEFAULT, H5P_DEFAULT) } |]
+  checkError =<< [CU.exp| hid_t { H5Fcreate($bs-cstr:c_filename, $(unsigned int c_flags), H5P_DEFAULT, H5P_DEFAULT) } |]
 
 -- | Close a file.
 --
@@ -280,7 +280,7 @@ h5o_open ::
   Text ->
   -- | new object handle
   IO Hid
-h5o_open parent path = checkError =<< [C.exp| hid_t { H5Oopen($(hid_t parent), $bs-ptr:c_path, H5P_DEFAULT) } |]
+h5o_open parent path = checkError =<< [C.exp| hid_t { H5Oopen($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
   where
     c_path = encodeUtf8 path
 
@@ -334,7 +334,7 @@ h5g_create parent path = do
   !_ <-
     checkError
       =<< [CU.block| herr_t {
-          const hid_t g = H5Gcreate($(hid_t parent), $bs-ptr:c_path,
+          const hid_t g = H5Gcreate($(hid_t parent), $bs-cstr:c_path,
                                     H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
           if (g < 0) { return (herr_t)g; }
           return H5Gclose(g); } |]
@@ -382,7 +382,7 @@ h5l_delete ::
   Text ->
   IO ()
 h5l_delete parent path =
-  void . checkError =<< [CU.exp| herr_t { H5Ldelete($(hid_t parent), $bs-ptr:c_path, H5P_DEFAULT) } |]
+  void . checkError =<< [CU.exp| herr_t { H5Ldelete($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
   where
     c_path = encodeUtf8 path
 
@@ -394,7 +394,7 @@ h5l_exists ::
   Text ->
   -- | whether the link exists
   IO Bool
-h5l_exists parent path = toBool <$> [CU.exp| htri_t { H5Lexists($(hid_t parent), $bs-ptr:c_path, H5P_DEFAULT) } |]
+h5l_exists parent path = toBool <$> [CU.exp| htri_t { H5Lexists($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
   where
     c_path = encodeUtf8 path
 
@@ -825,14 +825,14 @@ getMaxDims dims strides
 h5d_open :: HasCallStack => Hid -> Text -> IO Hid
 h5d_open parent name =
   checkError
-    =<< [C.exp| hid_t { H5Dopen($(hid_t parent), $bs-ptr:c_name, H5P_DEFAULT) } |]
+    =<< [C.exp| hid_t { H5Dopen($(hid_t parent), $bs-cstr:c_name, H5P_DEFAULT) } |]
   where
     c_name = encodeUtf8 name
 
 h5d_create :: HasCallStack => Hid -> Text -> Datatype -> Dataspace -> IO Hid
 h5d_create parent name dtype dspace =
   checkError
-    =<< [C.exp| hid_t { H5Dcreate($(hid_t parent), $bs-ptr:c_name, $(hid_t c_dtype),
+    =<< [C.exp| hid_t { H5Dcreate($(hid_t parent), $bs-cstr:c_name, $(hid_t c_dtype),
                                   $(hid_t c_dspace), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT) } |]
   where
     c_name = encodeUtf8 name
@@ -992,7 +992,7 @@ h5a_open object name =
     (k, v) -> return . Attribute $ Handle v k
   where
     c_name = encodeUtf8 name
-    acquire = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-ptr:c_name, H5P_DEFAULT) } |]
+    acquire = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-cstr:c_name, H5P_DEFAULT) } |]
 
 h5a_create :: (HasCallStack, MonadResource m) => Hid -> Text -> Datatype -> Dataspace -> m Attribute
 h5a_create object name dtype dspace = do
@@ -1002,7 +1002,7 @@ h5a_create object name dtype dspace = do
       acquire =
         checkError
           =<< [C.exp| hid_t {
-                H5Acreate($(hid_t object), $bs-ptr:c_name,
+                H5Acreate($(hid_t object), $bs-cstr:c_name,
                           $(hid_t c_dtype), $(hid_t c_dspace),
                           H5P_DEFAULT, H5P_DEFAULT)
               } |]
@@ -1070,12 +1070,12 @@ h5a_write object name value =
     return ()
 
 h5a_exists :: HasCallStack => Hid -> Text -> IO Bool
-h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object), $bs-ptr:c_name) } |]
+h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object), $bs-cstr:c_name) } |]
   where
     c_name = encodeUtf8 name
 
 h5a_delete :: HasCallStack => Hid -> Text -> IO ()
-h5a_delete object name = void . checkError =<< [C.exp| herr_t { H5Adelete($(hid_t object), $bs-ptr:c_name) } |]
+h5a_delete object name = void . checkError =<< [C.exp| herr_t { H5Adelete($(hid_t object), $bs-cstr:c_name) } |]
   where
     c_name = encodeUtf8 name
 
