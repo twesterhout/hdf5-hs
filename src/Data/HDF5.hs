@@ -209,12 +209,13 @@ createDataset parent index dspace dtype =
 
 writeDataset :: (HasCallStack, KnownDataset a, MonadResource m) => Group -> Text -> a -> m ()
 writeDataset parent index value =
-  withArrayView value $ \(ArrayView object_dtype object_dspace ~_) -> do
+  withArrayView value $ \view@(ArrayView object_dtype object_dspace _) -> do
     exists parent index >>= \case
-      False -> createDataset parent index object_dspace object_dtype
+      False -> do
+        dataset_dspace <- guessDataspace object_dspace
+        createDataset parent index dataset_dspace object_dtype
       _ -> return ()
-    openObject parent index >>= foldSome forceDataset >>= \object ->
-      h5d_write object object_dtype object_dspace value
+    openObject parent index >>= foldSome forceDataset >>= \object -> h5d_write object view
 
 delete :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
 delete parent name = liftIO $ h5l_delete (rawHandle parent) name

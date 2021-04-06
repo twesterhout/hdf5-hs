@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Data.HDF5
+import qualified Data.Vector.Storable as V
 import System.Directory
 import Test.Hspec
 import Prelude hiding (withFile)
@@ -34,3 +35,13 @@ main = hspec $ do
       _ <- withFile "test/a_non_existant_file.h5" WriteTruncate (\_ -> return ())
       doesFileExist "test/a_non_existant_file.h5" `shouldReturn` True
       removeFile "test/a_non_existant_file.h5"
+  describe "Datasets" $ do
+    it "writes strided datasets" $ do
+      (matrix :: TemporaryStridedMatrix Float) <-
+        withFile' "test/strided_test_file.h5" WriteTruncate $ \g -> do
+          writeDataset g "A" $ TemporaryStridedMatrix (2, 3) 4 (V.fromList [(1 :: Float) .. 8])
+          openDataset @Text g "A" >>= readDataset
+      matrix `shouldBe` (TemporaryStridedMatrix (2, 3) 3 (V.fromList [1, 2, 3, 5, 6, 7]))
+      removeFile "test/strided_test_file.h5"
+
+-- removeFile "test/strided_test_file.h5"

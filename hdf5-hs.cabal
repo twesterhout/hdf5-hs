@@ -167,6 +167,7 @@ test-suite hdf5-hs-test
   build-depends:       hdf5-hs
                      , hspec
                      , directory
+                     , vector
   ghc-options:         -threaded
                        -rtsopts
                        -with-rtsopts=-N

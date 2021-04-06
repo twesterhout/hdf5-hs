@@ -44,6 +44,7 @@ module Data.HDF5.Wrapper
     h5s_select_hyperslab,
     simpleDataspace,
     scalarDataspace,
+    guessDataspace,
 
     -- * Datasets
     h5d_open,
@@ -169,7 +170,7 @@ collectStack = uninterruptibleMask_ $
       fmap checkError' $
         [C.exp| herr_t {
           H5Ewalk2($(hid_t stack),
-                   H5E_WALK_UPWARD,
+                   H5E_WALK_DOWNWARD,
                    $(herr_t (* func)(unsigned int, const H5E_error2_t*, void*)),
                    NULL) } |]
 
@@ -793,6 +794,40 @@ h5s_select_hyperslab dspace start size stride = do
             <> show stride
         return ()
 
+h5s_is_regular_hyperslab :: HasCallStack => Dataspace -> IO Bool
+h5s_is_regular_hyperslab dspace =
+  withFrozenCallStack $
+    fromHtri =<< [C.exp| htri_t { H5Sis_regular_hyperslab($(hid_t h)) } |]
+  where
+    h = rawHandle dspace
+
+compressHyperslabs :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
+compressHyperslabs dspace =
+  liftIO (h5s_is_regular_hyperslab dspace) >>= \case
+    True -> do
+      let c_dspace = rawHandle dspace
+          raw =
+            checkError
+              =<< [C.block| hid_t {
+                    hsize_t start[H5S_MAX_RANK];
+                    hsize_t stride[H5S_MAX_RANK];
+                    hsize_t count[H5S_MAX_RANK];
+                    hsize_t block[H5S_MAX_RANK];
+                    herr_t status =
+                      H5Sget_regular_hyperslab($(hid_t c_dspace), start, stride, count, block);
+                    if (status < 0) { return (hid_t)status; }
+                    int const rank = H5Sget_simple_extent_ndims($(hid_t c_dspace));
+                    if (rank < 0) { return (hid_t)rank; }
+                    hsize_t dims[H5S_MAX_RANK];
+                    for (int i = 0; i < rank; ++i) {
+                      dims[i] = count[i] * block[i];
+                    }
+                    return H5Screate_simple(rank, dims, dims);
+                  } |]
+      allocate (liftIO raw) (liftIO . h5s_close) >>= \case
+        (k, h) -> return $ Dataspace (Handle h k)
+    False -> error "only a single hyperslab can be compressed"
+
 toUnsigned :: (Show a, Integral a, Integral b) => a -> b
 toUnsigned x
   | x < 0 = error $ "negative size or stride: " <> show x
@@ -844,10 +879,36 @@ h5d_get_space dataset = checkError =<< [C.exp| hid_t { H5Dget_space($(hid_t h)) 
   where
     h = rawHandle dataset
 
+getDataspace :: forall m. (HasCallStack, MonadResource m) => Dataset -> m Dataspace
+getDataspace dataset = do
+  (k, v) <- allocate (liftIO $ h5d_get_space dataset) (liftIO . h5s_close)
+  return $ Dataspace (Handle v k)
+
+getDatatype :: forall m. (HasCallStack, MonadResource m) => Dataset -> m Datatype
+getDatatype dataset = do
+  (k, v) <- allocate (liftIO $ h5d_get_type dataset) (liftIO . h5o_close)
+  return $ Datatype (Handle v k)
+
 h5d_get_type :: HasCallStack => Dataset -> IO Hid
 h5d_get_type dataset = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } |]
   where
     h = rawHandle dataset
+
+guessDataspace :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
+guessDataspace dspace = do
+  let c_dspace = rawHandle dspace
+  c_sel_type <-
+    liftIO $
+      checkError =<< [C.exp| int { H5Sget_select_type($(hid_t c_dspace)) } |]
+  if c_sel_type == [CU.pure| int { H5S_SEL_ALL } |]
+    then return dspace
+    else
+      if c_sel_type == [CU.pure| int { H5S_SEL_HYPERSLABS } |]
+        then compressHyperslabs dspace
+        else
+          error $
+            "dataspace can be automatically constructed only from "
+              <> "H5S_SEL_ALL or H5S_SEL_HYPERSLABS selections"
 
 bufferSizeFor :: MonadIO m => Datatype -> Dataspace -> m Int
 bufferSizeFor dtype dspace =
@@ -879,20 +940,21 @@ h5d_read dataset = do
   close dspace
   return value
 
-h5d_write :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> Datatype -> Dataspace -> a -> m ()
-h5d_write dataset dataset_dtype dataset_dspace value =
-  withArrayView value $ \(ArrayView object_dtype object_dspace buffer) -> do
-    checkDatatype object_dtype dataset_dtype
-    let c_dataset = rawHandle dataset
-        c_object_dtype = rawHandle object_dtype
-        c_object_dspace = rawHandle object_dspace
-        c_dataset_dspace = rawHandle dataset_dspace
-    !_ <- liftIO . MV.unsafeWith buffer $ \bufferPtr ->
-      checkError
-        =<< [C.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_object_dtype), $(hid_t c_object_dspace),
-                                      $(hid_t c_dataset_dspace), H5P_DEFAULT,
-                                      (const void*)$(const uint8_t* bufferPtr)) } |]
-    return ()
+h5d_write :: forall m. (HasCallStack, MonadResource m) => Dataset -> ArrayView -> m ()
+h5d_write dataset (ArrayView object_dtype object_dspace buffer) = withFrozenCallStack $ do
+  dataset_dtype <- getDatatype dataset
+  checkDatatype object_dtype dataset_dtype
+  dataset_dspace <- getDataspace dataset
+  let c_dataset = rawHandle dataset
+      c_object_dtype = rawHandle object_dtype
+      c_object_dspace = rawHandle object_dspace
+      c_dataset_dspace = rawHandle dataset_dspace
+  !_ <- liftIO . MV.unsafeWith buffer $ \bufferPtr ->
+    checkError
+      =<< [C.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_object_dtype), $(hid_t c_object_dspace),
+                                    $(hid_t c_dataset_dspace), H5P_DEFAULT,
+                                    (const void*)$(const uint8_t* bufferPtr)) } |]
+  return ()
 
 instance (Storable a, KnownDatatype a) => KnownDataset [a] where
   withArrayView xs = withArrayView (V.fromList xs)
@@ -909,6 +971,7 @@ instance (Storable a, KnownDatatype a) => KnownDataset (Vector a) where
             "array has wrong shape: " <> show shape <> "; expected a one-dimensional array"
 
 data TemporaryContiguousArray a = TemporaryContiguousArray ![Int] !(Vector a)
+  deriving stock (Eq, Show)
 
 instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryContiguousArray a) where
   withArrayView (TemporaryContiguousArray shape v) action = do
@@ -939,6 +1002,7 @@ instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryContiguousArray
     return $ TemporaryContiguousArray dims v
 
 data TemporaryStridedMatrix a = TemporaryStridedMatrix !(Int, Int) !Int !(Vector a)
+  deriving stock (Eq, Show)
 
 instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryStridedMatrix a) where
   withArrayView (TemporaryStridedMatrix (d₀, d₁) s₀ v) action = do
@@ -953,7 +1017,7 @@ instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryStridedMatrix a
         <> show (d₀, s₀)
     dtype <- ofType @a
     dspace <- simpleDataspace [d₀, s₀]
-    liftIO $ h5s_select_hyperslab dspace [0, 0] [1, 1] [d₀, d₁]
+    liftIO $ h5s_select_hyperslab dspace [0, 0] [d₀, d₁] [1, 1]
     buffer <- liftIO $ V.unsafeThaw v
     r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
     close dspace
