@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.Complex
 import Data.HDF5
 import qualified Data.Vector.Storable as V
 import System.Directory
@@ -43,5 +44,12 @@ main = hspec $ do
           openDataset @Text g "A" >>= readDataset
       matrix `shouldBe` (TemporaryStridedMatrix (2, 3) 3 (V.fromList [1, 2, 3, 5, 6, 7]))
       removeFile "test/strided_test_file.h5"
+    it "writes complex datasets" $ do
+      xs <-
+        withFile' "test/complex_test_file.h5" WriteTruncate $ \g -> do
+          writeDataset g "A" $ [((1 :: Double) :+ 2), ((-5) :+ 0.1)]
+          openDataset @Text g "A" >>= readDataset
+      xs `shouldBe` [((1 :: Double) :+ 2), ((-5) :+ 0.1)]
+      removeFile "test/complex_test_file.h5"
 
 -- removeFile "test/strided_test_file.h5"

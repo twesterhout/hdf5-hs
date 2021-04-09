@@ -196,9 +196,12 @@ prettyH5Exception (H5Exception code stack msg) =
       xs@(_ : _) -> mconcat $ "\n  " : xs
       [] -> ""
 
+_fail :: (HasCallStack, Integral a) => Maybe Text -> a -> IO a
+_fail msg code = collectStack >>= \stack -> throw $ H5Exception (fromIntegral code) stack msg
+
 _checkError :: (HasCallStack, Integral a) => Maybe Text -> a -> IO a
 _checkError msg !x
-  | x < 0 = collectStack >>= \stack -> throw $ H5Exception (fromIntegral x) stack msg
+  | x < 0 = _fail msg x
   | otherwise = return x
 
 -- checkErrorWithMsg :: Integral a => Text -> a -> IO a
@@ -479,24 +482,25 @@ h5t_NATIVE_FLOAT = [CU.pure| hid_t { H5T_NATIVE_FLOAT } |]
 h5t_NATIVE_DOUBLE :: Hid
 h5t_NATIVE_DOUBLE = [CU.pure| hid_t { H5T_NATIVE_DOUBLE } |]
 
-createComplexDatatype :: Hid -> IO Hid
+createComplexDatatype :: HasCallStack => Hid -> IO Hid
 createComplexDatatype dtype =
-  checkError
-    =<< [C.block| hid_t {
-      const size_t size = H5Tget_size($(hid_t dtype));
-      if (size == 0) { return -1; }
-      hid_t complex_dtype = H5Tcreate(H5T_COMPOUND, size);
-      if (complex_dtype < 0) { return complex_dtype; }
-      herr_t status = H5Tinsert(complex_dtype, "r", 0, $(hid_t dtype));
-      if (status < 0) { goto cleanup; }
-      status = H5Tinsert(complex_dtype, "i", size, $(hid_t dtype));
-      if (status < 0) { goto cleanup; }
-      return complex_dtype;
+  withFrozenCallStack $
+    checkError
+      =<< [C.block| hid_t {
+            const size_t size = H5Tget_size($(hid_t dtype));
+            if (size == 0) { return -1; }
+            hid_t complex_dtype = H5Tcreate(H5T_COMPOUND, 2 * size);
+            if (complex_dtype < 0) { return complex_dtype; }
+            herr_t status = H5Tinsert(complex_dtype, "r", 0, $(hid_t dtype));
+            if (status < 0) { goto cleanup; }
+            status = H5Tinsert(complex_dtype, "i", size, $(hid_t dtype));
+            if (status < 0) { goto cleanup; }
+            return complex_dtype;
 
-    cleanup:
-      H5Tclose(complex_dtype);
-      return status;
-  } |]
+          cleanup:
+            H5Tclose(complex_dtype);
+            return status;
+          } |]
 
 getComplexDatatype :: MonadResource m => Datatype -> m Datatype
 getComplexDatatype dtype = do
@@ -507,20 +511,21 @@ getComplexDatatype dtype = do
 
 createTextDatatype :: HasCallStack => IO Hid
 createTextDatatype =
-  checkError
-    =<< [C.block| hid_t {
-      const hid_t dtype = H5Tcopy(H5T_C_S1);
-      if (dtype < 0) { return dtype; }
-      herr_t status = H5Tset_cset(dtype, H5T_CSET_UTF8);
-      if (status < 0) { goto cleanup; }
-      status = H5Tset_size(dtype, H5T_VARIABLE);
-      if (status < 0) { goto cleanup; }
-      return dtype;
+  withFrozenCallStack $
+    checkError
+      =<< [C.block| hid_t {
+            const hid_t dtype = H5Tcopy(H5T_C_S1);
+            if (dtype < 0) { return dtype; }
+            herr_t status = H5Tset_cset(dtype, H5T_CSET_UTF8);
+            if (status < 0) { goto cleanup; }
+            status = H5Tset_size(dtype, H5T_VARIABLE);
+            if (status < 0) { goto cleanup; }
+            return dtype;
 
-    cleanup:
-      H5Tclose(dtype);
-      return status;
-  } |]
+          cleanup:
+            H5Tclose(dtype);
+            return status;
+          } |]
 
 getTextDatatype :: (HasCallStack, MonadResource m) => m Datatype
 getTextDatatype =
