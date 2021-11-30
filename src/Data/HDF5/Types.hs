@@ -73,7 +73,7 @@ data H5I_type_t
 -- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
 -- while keeping everything type-safe.
 data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
-  deriving stock (Read, Show, Eq)
+  deriving stock (Read, Show, Eq, Typeable)
 
 data Handle = Handle {-# UNPACK #-} !Hid {-# UNPACK #-} !ReleaseKey
 
@@ -83,6 +83,8 @@ data Object (k :: ObjectType) where
   Group :: {-# UNPACK #-} !Handle -> Object 'GroupTy
   Dataset :: {-# UNPACK #-} !Handle -> Object 'DatasetTy
   Datatype :: {-# UNPACK #-} !Handle -> Object 'DatatypeTy
+
+deriving instance Typeable (Object k)
 
 newtype Dataspace = Dataspace Handle
 

@@ -33,6 +33,7 @@ module Data.HDF5
     sliceHyperslab,
     selectHyperslab,
     slice,
+    open,
     SelectionType (..),
     DatasetSlice (..),
     dataspaceSelectionType,
@@ -63,11 +64,16 @@ where
 import Control.Exception.Safe hiding (handle)
 import Control.Monad.IO.Unlift
 import Control.Monad.Trans.Resource
+import Data.Coerce
+import Data.Constraint
 import Data.HDF5.Types
 import Data.HDF5.Wrapper
 import Data.Some
 import qualified Data.Text as T
+import Data.Typeable (eqT, (:~:) (..))
 import System.Directory (doesFileExist)
+import qualified System.IO.Unsafe (unsafePerformIO)
+import qualified Unsafe.Coerce
 import Prelude hiding (Handle, find, first, group, withFile)
 
 -- $setup
@@ -149,6 +155,54 @@ openObjectRaw h@(Handle raw _) = do
       name <- liftIO $ h5i_get_name raw
       error $ show name <> " is a " <> show t <> "; expected an Object"
 
+objectType :: Object t -> ObjectType
+objectType object = case object of
+  (File _) -> FileTy
+  (Group _) -> GroupTy
+  (Dataset _) -> DatasetTy
+  (Datatype _) -> DatatypeTy
+
+prettyObjectType :: ObjectType -> Text
+prettyObjectType tp = case tp of
+  FileTy -> "File"
+  GroupTy -> "Group"
+  DatasetTy -> "Dataset"
+  DatatypeTy -> "Datatype"
+
+wrongObjectType :: HasCallStack => Object t1 -> proxy (Object t2) -> a
+wrongObjectType object _ =
+  error $
+    "wrong object type: "
+      <> show (getName object)
+      <> " is a "
+      <> prettyObjectType (objectType object)
+
+cast :: forall from to. (HasCallStack, Typeable from, Typeable to) => Object from -> Object to
+cast x = case (eqT :: Maybe (Object to :~: Object from)) of
+  Just Refl -> coerce x
+  Nothing -> withFrozenCallStack $ wrongObjectType x (Proxy :: Proxy (Object to))
+
+cast' :: forall t. (HasCallStack, Typeable t) => Some Object -> Object t
+cast' = foldSome helper
+  where
+    helper :: Object k -> Object t
+    helper = \case
+      x@(File _) -> cast x
+      x@(Group _) -> cast x
+      x@(Dataset _) -> cast x
+      x@(Datatype _) -> cast x
+
+open' :: (HasCallStack, MonadResource m) => Group -> Text -> m (Some Object)
+open' parent path =
+  allocate (liftIO $ h5o_open (rawHandle parent) path) (liftIO . h5o_close) >>= \case
+    (k, v) -> openObjectRaw (Handle v k)
+
+open :: (HasCallStack, Typeable t, MonadResource m) => Group -> Text -> m (Object t)
+open parent path = open' parent path >>= return . withFrozenCallStack cast'
+
+-- cast :: Object t1 -> Object t2
+-- cast x = case
+
 -- instance IsIndex String where
 --   withObject parent path action = withObject parent (toText path) action
 
@@ -168,12 +222,12 @@ forceGroup object = case object of
     allocate (liftIO $ h5o_open (rawHandle object) "/") (liftIO . h5o_close) >>= \case
       (k, v) -> return (Group (Handle v k))
   (Group h) -> return (Group h)
-  _ -> getName object >>= \name -> error $ show name <> " is not a Group"
+  _ -> error $ show (getName object) <> " is not a Group"
 
 forceDataset :: (HasCallStack, MonadResource m) => Object t -> m Dataset
 forceDataset object = case object of
   (Dataset h) -> return (Dataset h)
-  _ -> getName object >>= \name -> error $ show name <> " is not a Dataset"
+  _ -> error $ show (getName object) <> " is not a Dataset"
 
 openGroup :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Group
 openGroup parent index = openObject parent index >>= foldSome forceGroup
@@ -181,8 +235,8 @@ openGroup parent index = openObject parent index >>= foldSome forceGroup
 openDataset :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Dataset
 openDataset parent index = openObject parent index >>= foldSome forceDataset
 
-getName :: (HasCallStack, MonadIO m) => Object t -> m Text
-getName object = liftIO $ h5i_get_name (rawHandle object)
+getName :: HasCallStack => Object t -> Text
+getName object = System.IO.Unsafe.unsafePerformIO $ h5i_get_name (rawHandle object)
 
 readDataset :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 readDataset dataset = h5d_read dataset
