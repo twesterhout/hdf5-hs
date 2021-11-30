@@ -45,6 +45,12 @@ module Data.HDF5.Wrapper
     simpleDataspace,
     scalarDataspace,
     guessDataspace,
+    getHyperslab,
+    sliceHyperslab,
+    selectHyperslab,
+    slice,
+    dataspaceSelectionType,
+    SelectionType (..),
 
     -- * Datasets
     h5d_open,
@@ -55,6 +61,7 @@ module Data.HDF5.Wrapper
     h5d_write,
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
+    getDataspace,
 
     -- * Attributes
     h5a_open,
@@ -77,7 +84,8 @@ import qualified Data.ByteString as B
 import Data.Complex
 import Data.HDF5.Context
 import Data.HDF5.Types
-import Data.Vector.Storable (Vector)
+import qualified Data.List
+import Data.Vector.Storable (Vector, (!))
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.ByteString
 import qualified Data.Vector.Storable.Mutable as MV
@@ -92,6 +100,7 @@ import qualified GHC.Show
 import GHC.Stack
 import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
+import qualified System.IO.Unsafe
 import Prelude hiding (first, group)
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
@@ -757,6 +766,12 @@ h5s_get_simple_extent_ndims dspace =
   where
     h = rawHandle dspace
 
+dataspaceRank :: Dataspace -> Int
+dataspaceRank = System.IO.Unsafe.unsafePerformIO . h5s_get_simple_extent_ndims
+
+dataspaceShape :: Dataspace -> [Int]
+dataspaceShape = System.IO.Unsafe.unsafePerformIO . h5s_get_simple_extent_dims
+
 h5s_get_simple_extent_dims :: HasCallStack => Dataspace -> IO [Int]
 h5s_get_simple_extent_dims dspace = do
   ndim <- h5s_get_simple_extent_ndims dspace
@@ -766,6 +781,20 @@ h5s_get_simple_extent_dims dspace = do
       checkError
         =<< [C.exp| int { H5Sget_simple_extent_dims($(hid_t h), $(hsize_t* dimsPtr), NULL) } |]
     fmap fromIntegral <$> peekArray ndim dimsPtr
+
+data SelectionType = SelectedNone | SelectedPoints | SelectedHyperslabs | SelectedAll
+  deriving (Read, Show, Eq)
+
+dataspaceSelectionType :: Dataspace -> SelectionType
+dataspaceSelectionType dspace
+  | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_NONE } |] = SelectedNone
+  | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_POINTS } |] = SelectedPoints
+  | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_HYPERSLABS } |] = SelectedHyperslabs
+  | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_ALL } |] = SelectedAll
+  | otherwise = error $ "invalid H5S_sel_type: " <> show c_sel_type
+  where
+    c_dspace = rawHandle dspace
+    c_sel_type = [CU.pure| int { H5Sget_select_type($(hid_t c_dspace)) } |]
 
 h5s_select_hyperslab :: HasCallStack => Dataspace -> [Int] -> [Int] -> [Int] -> IO ()
 h5s_select_hyperslab dspace start size stride = do
@@ -806,6 +835,9 @@ h5s_is_regular_hyperslab dspace =
   where
     h = rawHandle dspace
 
+isRegularHyperslab :: Dataspace -> Bool
+isRegularHyperslab = System.IO.Unsafe.unsafePerformIO . h5s_is_regular_hyperslab
+
 compressHyperslabs :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
 compressHyperslabs dspace =
   liftIO (h5s_is_regular_hyperslab dspace) >>= \case
@@ -837,6 +869,128 @@ toUnsigned :: (Show a, Integral a, Integral b) => a -> b
 toUnsigned x
   | x < 0 = error $ "negative size or stride: " <> show x
   | otherwise = fromIntegral x
+
+hyperslabRank :: Hyperslab -> Int
+hyperslabRank = V.length . hyperslabStart
+
+getHyperslab :: Dataspace -> Hyperslab
+getHyperslab dspace =
+  case dataspaceSelectionType dspace of
+    SelectedNone -> error "nothing is selected"
+    SelectedPoints -> error "points selection cannot be represented as a hyperslab"
+    SelectedHyperslabs -> System.IO.Unsafe.unsafePerformIO $ do
+      unless (isRegularHyperslab dspace) $
+        error "non-regular hyperslab cannot be converted to regular hyperslab"
+      start <- MV.new rank
+      stride <- MV.new rank
+      count <- MV.new rank
+      block <- MV.new rank
+      let c_dspace = rawHandle dspace
+      _ <- (checkError =<<) $
+        MV.unsafeWith start $ \startPtr ->
+          MV.unsafeWith stride $ \stridePtr ->
+            MV.unsafeWith count $ \countPtr ->
+              MV.unsafeWith block $ \blockPtr ->
+                [C.exp| herr_t {
+                  H5Sget_regular_hyperslab($(hid_t c_dspace), $(hsize_t* startPtr),
+                    $(hsize_t* stridePtr), $(hsize_t* countPtr), $(hsize_t* blockPtr)) } |]
+      start' <- V.freeze start
+      stride' <- V.freeze stride
+      count' <- V.freeze count
+      block' <- V.freeze block
+      return $
+        Hyperslab
+          (V.map fromIntegral start')
+          (V.map fromIntegral stride')
+          (V.map fromIntegral count')
+          (V.map fromIntegral block')
+    SelectedAll ->
+      Hyperslab
+        (V.replicate rank 0)
+        (V.replicate rank 1)
+        (fromList (dataspaceShape dspace))
+        (V.replicate rank 1)
+  where
+    rank = dataspaceRank dspace
+
+-- Hyperslab <$> V.map fromIntegral (V.freeze start)
+
+checkSliceArguments :: Hyperslab -> Int -> Int -> Int -> Int -> a -> a
+checkSliceArguments hyperslab dim start count stride
+  | dim < 0 || dim >= rank =
+    error $ "invalid dim: " <> show dim <> "; dataspace is " <> show rank <> "-dimensional"
+  | start < 0 || start >= extent =
+    error $
+      "invalid start: " <> show start <> "; dataspace shape is " <> show shape
+  | stride < 1 = error $ "invalid stride: " <> show stride
+  | count < 0 && count /= -1 = error $ "invalid count: " <> show count
+  | V.any (/= 1) (hyperslabBlock hyperslab) =
+    error $ "only size-1 blocks are supported"
+  | otherwise = id
+  where
+    rank = hyperslabRank hyperslab
+    extent = hyperslabCount hyperslab V.! dim
+    shape = hyperslabCount hyperslab
+
+sliceHyperslab :: Int -> Int -> Int -> Int -> Hyperslab -> Hyperslab
+sliceHyperslab dim start count stride hyperslab@(Hyperslab startV strideV countV blockV) =
+  checkSliceArguments hyperslab dim start count stride $
+    let newStart = start + (startV ! dim)
+        newStride = (strideV ! dim) * stride
+        newCount
+          | count == -1 || start + count * stride > (countV ! dim) =
+            (countV ! dim - start) `div` stride
+          | otherwise = count
+     in Hyperslab
+          (startV V.// [(dim, newStart)])
+          (strideV V.// [(dim, newStride)])
+          (countV V.// [(dim, newCount)])
+          blockV
+
+selectHyperslab :: MonadResource m => Hyperslab -> Dataspace -> m Dataspace
+selectHyperslab hyperslab dspace = do
+  let c_dspace = rawHandle dspace
+      _with f = V.unsafeWith (V.map fromIntegral (f hyperslab))
+      raw =
+        (checkError =<<) $
+          _with hyperslabStart $ \c_start ->
+            _with hyperslabStride $ \c_stride ->
+              _with hyperslabCount $ \c_count ->
+                _with hyperslabBlock $ \c_block ->
+                  [CU.block| hid_t {
+                    hid_t new_dspace = H5Scopy($(hid_t c_dspace));
+                    if (new_dspace < 0) { return new_dspace; }
+                    herr_t status = H5Sselect_hyperslab(new_dspace, H5S_SELECT_SET,
+                      $(const hsize_t* c_start), $(const hsize_t* c_stride),
+                      $(const hsize_t* c_count), $(const hsize_t* c_block));
+                    if (status < 0) {
+                      H5Sclose(new_dspace);
+                      return (hid_t)status;
+                    }
+                    return new_dspace;
+                  } |]
+  allocate (liftIO raw) (liftIO . h5s_close) >>= \case
+    (k, h) -> return $ Dataspace (Handle h k)
+
+sliceDataset :: Int -> Int -> Int -> Int -> Dataset -> DatasetSlice
+sliceDataset dim start count stride dataset =
+  System.IO.Unsafe.unsafePerformIO $
+    runResourceT $ do
+      !r <-
+        DatasetSlice dataset . sliceHyperslab dim start count stride . getHyperslab
+          <$> getDataspace dataset
+      pure r
+
+sliceDatasetSlice :: Int -> Int -> Int -> Int -> DatasetSlice -> DatasetSlice
+sliceDatasetSlice dim start count stride (DatasetSlice dataset hyperslab) =
+  DatasetSlice dataset (sliceHyperslab dim start count stride hyperslab)
+
+class CanSlice t where
+  slice :: Int -> Int -> Int -> Int -> t -> DatasetSlice
+
+instance CanSlice Dataset where slice = sliceDataset
+
+instance CanSlice DatasetSlice where slice = sliceDatasetSlice
 
 {-
 simpleStrides :: [Int] -> [Int]
