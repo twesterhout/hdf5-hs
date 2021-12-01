@@ -36,6 +36,8 @@ module Data.HDF5
     open,
     SelectionType (..),
     DatasetSlice (..),
+    ArrayView' (..),
+    readSelectedInplace,
     dataspaceSelectionType,
     Datatype,
     Dataspace,

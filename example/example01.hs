@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import Control.Exception.Safe (assert)
+import Control.Monad.Trans.Resource
 import qualified Data.HDF5 as H5
-import Data.Vector.Storable (Vector)
+import Data.Vector.Storable (MVector, Vector)
 import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable.Mutable as MV
 
 {- Reproduces "Read and write to a dataset" example from HDF5 documentation:
    <https://raw.githubusercontent.com/HDFGroup/hdf5/develop/examples/h5_rdwt.c>
@@ -30,7 +32,17 @@ main =
     let (H5.DatasetSlice _ hyperslab) =
           H5.slice {- dim -} 1 {- start -} 2 {- count -} (-1 {- stride -}) 2 $
             H5.slice {- dim -} 0 {- start -} 0 {- count -} 3 {- stride -} 1 $ dataset
-    print $ hyperslab
+    -- print $ hyperslab
+
+    dataspace <- H5.getDataspace dataset
+    buf <- MV.new (4 * 6)
+    liftIO $
+      MV.unsafeWith buf $ \bufPtr -> runResourceT $ do
+        let view :: H5.ArrayView' Int
+            view = H5.ArrayView' bufPtr [4, 6] [6, 1]
+            selection = H5.DatasetSlice dataset (H5.getHyperslab dataspace)
+        H5.readSelectedInplace view selection
+    print =<< V.freeze buf
 
     -- Close the dataset early. Not strictly necessary, because ResourceT monad
     -- transformer takes care of that.

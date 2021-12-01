@@ -48,9 +48,12 @@ module Data.HDF5.Wrapper
     getHyperslab,
     sliceHyperslab,
     selectHyperslab,
+    prepareStrides,
     slice,
+    readSelectedInplace,
     dataspaceSelectionType,
     SelectionType (..),
+    readSelectedInplace,
 
     -- * Datasets
     h5d_open,
@@ -94,7 +97,7 @@ import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
 import Foreign.Marshal.Alloc (allocaBytes)
 import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
 import Foreign.Marshal.Utils (toBool)
-import Foreign.Ptr (FunPtr, Ptr, freeHaskellFunPtr, nullPtr)
+import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullPtr)
 import Foreign.Storable
 import qualified GHC.Show
 import GHC.Stack
@@ -1074,6 +1077,64 @@ bufferSizeFor dtype dspace =
   liftIO $
     (*) <$> (product <$> h5s_get_simple_extent_dims dspace)
       <*> (h5t_get_size dtype)
+
+isValidArrayView :: ArrayView' a -> Bool
+isValidArrayView = const True
+
+-- Convert row-major strides (i.e. in decreasing order) into strides understood by HDF5.
+prepareStrides :: [Int] -> [Int]
+prepareStrides strides' = snd $ foldr combine (1, []) strides'
+  where
+    combine x (c, ys) = (x, x `div` c : ys)
+
+arrayViewHyperslab :: ArrayView' a -> Hyperslab
+arrayViewHyperslab (ArrayView' _ shape strides) =
+  Hyperslab
+    (V.replicate rank 0)
+    (fromList $ prepareStrides strides)
+    (fromList shape)
+    (V.replicate rank 1)
+  where
+    !rank = length shape
+
+boundingBox :: Hyperslab -> Vector Int
+boundingBox (Hyperslab start stride count _) =
+  V.zipWith3 (\start' stride' count' -> start' + stride' * count') start stride count
+
+dataspaceFromHyperslab :: MonadResource m => Hyperslab -> m Dataspace
+dataspaceFromHyperslab hyperslab =
+  selectHyperslab hyperslab =<< simpleDataspace (V.toList (boundingBox hyperslab))
+
+arrayViewDataspace :: (KnownDatatype a, MonadResource m) => ArrayView' a -> m Dataspace
+arrayViewDataspace view = do
+  let hyperslab = arrayViewHyperslab view
+  liftIO $ print 1
+  liftIO $ print hyperslab
+  dataspaceFromHyperslab hyperslab
+
+readSelectedInplace ::
+  forall a m.
+  (MonadResource m, KnownDatatype a) =>
+  ArrayView' a ->
+  DatasetSlice ->
+  m ()
+readSelectedInplace view@(ArrayView' ptr shape stride) (DatasetSlice dataset hyperslab) = do
+  destDatatype <- ofType @a
+  destDataspace <- arrayViewDataspace view
+  sourceDataspace <- dataspaceFromHyperslab hyperslab
+  liftIO $ print 2
+  liftIO $ print hyperslab
+  let c_dataset = rawHandle dataset
+      c_mem_type = rawHandle destDatatype
+      c_mem_space = rawHandle destDataspace
+      c_file_space = rawHandle sourceDataspace
+      c_buf = castPtr ptr
+  !_ <-
+    liftIO $
+      checkError
+        =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_mem_type), $(hid_t c_mem_space),
+                                   $(hid_t c_file_space), H5P_DEFAULT, $(void* c_buf)) } |]
+  return ()
 
 h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 h5d_read dataset = do
