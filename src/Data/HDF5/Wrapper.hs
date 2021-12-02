@@ -588,6 +588,8 @@ instance KnownDatatype Word32 where ofType = getStaticDatatype h5t_NATIVE_UINT32
 
 instance KnownDatatype Word64 where ofType = getStaticDatatype h5t_NATIVE_UINT64
 
+instance KnownDatatype Word where ofType = ofType @Word64
+
 instance KnownDatatype CFloat where ofType = getStaticDatatype h5t_NATIVE_FLOAT
 
 instance KnownDatatype Float where ofType = ofType @CFloat
