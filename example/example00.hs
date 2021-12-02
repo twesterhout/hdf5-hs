@@ -9,9 +9,16 @@ import qualified Data.HDF5 as H5
 main :: IO ()
 main =
   -- Create a new file
-  H5.withFile' "dset.h5" H5.WriteTruncate $ \file ->
+  H5.withFile "dset.h5" H5.WriteTruncate $ \file -> do
     -- Create a dataset
-    join $
-      H5.createDataset file "/dset"
-        <$> (H5.ofShape [4, 6]) -- choose shape
-        <*> (H5.ofType @Int) -- choose data type
+    _ <-
+      join $
+        H5.createDataset' file "/dset"
+          <$> (H5.ofType @Int) -- choose data type
+          <*> (H5.ofShape [4, 6]) -- choose shape
+
+    -- Alternatively, if you're not a fan of combinators
+    dspace <- H5.ofShape [4, 6]
+    dtype <- H5.ofType @Int
+    _ <- H5.createDataset' file "/dset2" dtype dspace
+    return ()

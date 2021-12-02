@@ -28,10 +28,12 @@ main =
     (xs :: [[Int]]) <- H5.open file "/dset1" >>= H5.readDataset
     print xs
 
+    H5.createDataset file "/dset2" $ [1.0 .. (6.0 :: Float)]
     -- Read part of a dataset
     H5.open file "/dset2"
       >>= (H5.sliceDataset 0 2 3 1 >>> H5.readSelected @(Vector Float))
       >>= print
+    -- prints [3.0,4.0,5.0]
 
     -- Update an existing dataset
     H5.open file "/dset2" >>= H5.writeDataset [(10 :: Float) .. 15]
