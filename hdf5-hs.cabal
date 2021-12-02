@@ -1,6 +1,6 @@
 cabal-version:       2.4
 name:                hdf5-hs
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            High-level Haskell bindings to HDF5 library
 description:         High-level Haskell bindings to HDF5 library
 homepage:            https://github.com/twesterhout/hdf5-hs
