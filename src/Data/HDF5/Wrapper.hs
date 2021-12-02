@@ -51,6 +51,7 @@ module Data.HDF5.Wrapper
     prepareStrides,
     slice,
     readSelectedInplace,
+    boundingBox,
     dataspaceSelectionType,
     SelectionType (..),
     readSelectedInplace,
@@ -1081,36 +1082,58 @@ bufferSizeFor dtype dspace =
 isValidArrayView :: ArrayView' a -> Bool
 isValidArrayView = const True
 
+areStridesOkay :: [Int] -> Bool
+areStridesOkay strides = go strides
+  where
+    go (x : y : ys) = if x `mod` y == 0 then go (y : ys) else False
+    go _ = True
+
 -- Convert row-major strides (i.e. in decreasing order) into strides understood by HDF5.
 prepareStrides :: [Int] -> [Int]
-prepareStrides strides' = snd $ foldr combine (1, []) strides'
+prepareStrides = snd . foldr combine (1, [])
   where
-    combine x (c, ys) = (x, x `div` c : ys)
+    combine x (c, ys) = let !y = x `div` c in (x, y : ys)
 
 arrayViewHyperslab :: ArrayView' a -> Hyperslab
 arrayViewHyperslab (ArrayView' _ shape strides) =
   Hyperslab
-    (V.replicate rank 0)
-    (fromList $ prepareStrides strides)
-    (fromList shape)
-    (V.replicate rank 1)
+    (V.replicate (rank + 1) 0)
+    (V.replicate (rank + 1) 1)
+    (fromList (shape ++ [1]))
+    (V.replicate (rank + 1) 1)
   where
     !rank = length shape
 
-boundingBox :: Hyperslab -> Vector Int
-boundingBox (Hyperslab start stride count _) =
-  V.zipWith3 (\start' stride' count' -> start' + stride' * count') start stride count
+boundingBox :: ArrayView' a -> [Int]
+boundingBox (ArrayView' _ shape strides) = case viaNonEmpty head shape of
+  Just h -> (h :) $ prepareStrides strides
+  Nothing -> []
 
-dataspaceFromHyperslab :: MonadResource m => Hyperslab -> m Dataspace
-dataspaceFromHyperslab hyperslab =
-  selectHyperslab hyperslab =<< simpleDataspace (V.toList (boundingBox hyperslab))
+-- dataspaceFromHyperslab :: MonadResource m => Hyperslab -> m Dataspace
+-- dataspaceFromHyperslab hyperslab =
+--   selectHyperslab hyperslab =<< simpleDataspace (V.toList box)
+--   where
+--     box =
+--       V.zipWith3
+--         (\start stride count -> start + stride * count)
+--         (hyperslabStart hyperslab)
+--         (hyperslabStride hyperslab)
+--         (hyperslabCount hyperslab)
 
 arrayViewDataspace :: (KnownDatatype a, MonadResource m) => ArrayView' a -> m Dataspace
-arrayViewDataspace view = do
-  let hyperslab = arrayViewHyperslab view
-  liftIO $ print 1
-  liftIO $ print hyperslab
-  dataspaceFromHyperslab hyperslab
+arrayViewDataspace view@(ArrayView' _ _ strides)
+  | areStridesOkay strides = do
+    liftIO $ print (boundingBox view)
+    liftIO $ print (arrayViewHyperslab view)
+    selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
+  | otherwise = error $ "unsupported strides: " <> show strides
+
+processSelection :: MonadResource m => DatasetSlice -> m Dataspace
+processSelection (DatasetSlice dataset hyperslab) = do
+  dataspace <- getDataspace dataset
+  dataspace' <- selectHyperslab hyperslab dataspace
+  close dataspace
+  pure dataspace'
 
 readSelectedInplace ::
   forall a m.
@@ -1118,23 +1141,25 @@ readSelectedInplace ::
   ArrayView' a ->
   DatasetSlice ->
   m ()
-readSelectedInplace view@(ArrayView' ptr shape stride) (DatasetSlice dataset hyperslab) = do
-  destDatatype <- ofType @a
-  destDataspace <- arrayViewDataspace view
-  sourceDataspace <- dataspaceFromHyperslab hyperslab
-  liftIO $ print 2
-  liftIO $ print hyperslab
-  let c_dataset = rawHandle dataset
-      c_mem_type = rawHandle destDatatype
-      c_mem_space = rawHandle destDataspace
-      c_file_space = rawHandle sourceDataspace
-      c_buf = castPtr ptr
-  !_ <-
-    liftIO $
-      checkError
-        =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_mem_type), $(hid_t c_mem_space),
+readSelectedInplace
+  view@(ArrayView' ptr shape stride)
+  selection@(DatasetSlice dataset hyperslab) = do
+    destDatatype <- ofType @a
+    destDataspace <- arrayViewDataspace view
+    sourceDataspace <- processSelection selection
+    liftIO $ print 2
+    liftIO $ print hyperslab
+    let c_dataset = rawHandle dataset
+        c_mem_type = rawHandle destDatatype
+        c_mem_space = rawHandle destDataspace
+        c_file_space = rawHandle sourceDataspace
+        c_buf = castPtr ptr
+    !_ <-
+      liftIO $
+        checkError
+          =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_mem_type), $(hid_t c_mem_space),
                                    $(hid_t c_file_space), H5P_DEFAULT, $(void* c_buf)) } |]
-  return ()
+    return ()
 
 h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 h5d_read dataset = do

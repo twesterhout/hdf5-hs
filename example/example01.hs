@@ -35,11 +35,11 @@ main =
     -- print $ hyperslab
 
     dataspace <- H5.getDataspace dataset
-    buf <- MV.new (4 * 6)
+    buf <- MV.new (4 * 14)
     liftIO $
       MV.unsafeWith buf $ \bufPtr -> runResourceT $ do
         let view :: H5.ArrayView' Int
-            view = H5.ArrayView' bufPtr [4, 6] [6, 1]
+            view = H5.ArrayView' bufPtr [4, 6] [14, 2]
             selection = H5.DatasetSlice dataset (H5.getHyperslab dataspace)
         H5.readSelectedInplace view selection
     print =<< V.freeze buf
