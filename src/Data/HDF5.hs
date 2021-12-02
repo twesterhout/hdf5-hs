@@ -19,26 +19,35 @@ module Data.HDF5
     AccessFlags (..),
     Group,
     createGroup,
-    openGroup,
+    -- openGroup,
     -- forceGroup,
     Dataset,
-    openDataset,
+    -- openDataset,
     -- openObject,
     -- forceDataset,
-    readDataset,
-    writeDataset,
-    createDataset,
-    getDataspace,
-    getHyperslab,
-    sliceHyperslab,
-    selectHyperslab,
+    -- readDataset,
+    -- writeDataset,
+    -- createDataset,
+    -- getDataspace,
+    -- getHyperslab,
+    -- sliceHyperslab,
+    -- selectHyperslab,
     slice,
+    sliceDataset,
     open,
-    SelectionType (..),
-    DatasetSlice (..),
+    openByIndex,
+    -- SelectionType (..),
+    -- DatasetSlice (..),
     ArrayView' (..),
+    readInplace,
     readSelectedInplace,
-    dataspaceSelectionType,
+    readDataset,
+    readSelected,
+    writeDataset,
+    writeSelected,
+    createDataset,
+    createDataset',
+    -- dataspaceSelectionType,
     Datatype,
     Dataspace,
     ofShape,
@@ -55,6 +64,7 @@ module Data.HDF5
     H5Exception (..),
     KnownDatatype (..),
     KnownDataset (..),
+    KnownDataset' (..),
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
     ArrayView (..),
@@ -115,7 +125,7 @@ openFile path flags = do
     (k, v) -> return $ File (Handle v k)
 
 -- | [bracket](https://wiki.haskell.org/Bracket_pattern) for HDF5 files.
-withFile ::
+withFile' ::
   (HasCallStack, MonadUnliftIO m) =>
   -- | filename
   Text ->
@@ -124,11 +134,11 @@ withFile ::
   -- | action to perform
   (File -> ResourceT m a) ->
   m a
-withFile path flags action =
+withFile' path flags action =
   runResourceT $
     openFile path flags >>= action
 
-withFile' ::
+withFile ::
   (HasCallStack, MonadUnliftIO m) =>
   -- | filename
   Text ->
@@ -137,14 +147,13 @@ withFile' ::
   -- | action to perform
   (Group -> ResourceT m a) ->
   m a
-withFile' path flags action = withFile path flags $ \file ->
-  forceGroup file >>= action
+withFile path flags action = withFile' path flags $ getRoot >=> action
 
 createGroup :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
 createGroup parent path = liftIO $ h5g_create (rawHandle parent) path
 
-class IsIndex i where
-  openObject :: (HasCallStack, MonadResource m) => Group -> i -> m (Some Object)
+-- class IsIndex i where
+--   openObject :: (HasCallStack, MonadResource m) => Group -> i -> m (Some Object)
 
 openObjectRaw :: (HasCallStack, MonadIO m) => Handle -> m (Some Object)
 openObjectRaw h@(Handle raw _) = do
@@ -199,8 +208,16 @@ open' parent path =
   allocate (liftIO $ h5o_open (rawHandle parent) path) (liftIO . h5o_close) >>= \case
     (k, v) -> openObjectRaw (Handle v k)
 
+openByIndex' :: (HasCallStack, MonadResource m) => Group -> Int -> m (Some Object)
+openByIndex' parent index =
+  allocate (liftIO $ h5o_open_by_idx (rawHandle parent) index) (liftIO . h5o_close) >>= \case
+    (k, v) -> openObjectRaw (Handle v k)
+
 open :: (HasCallStack, Typeable t, MonadResource m) => Group -> Text -> m (Object t)
 open parent path = open' parent path >>= return . withFrozenCallStack cast'
+
+openByIndex :: (HasCallStack, Typeable t, MonadResource m) => Group -> Int -> m (Object t)
+openByIndex parent index = openByIndex' parent index >>= return . withFrozenCallStack cast'
 
 -- cast :: Object t1 -> Object t2
 -- cast x = case
@@ -208,40 +225,40 @@ open parent path = open' parent path >>= return . withFrozenCallStack cast'
 -- instance IsIndex String where
 --   withObject parent path action = withObject parent (toText path) action
 
-instance IsIndex Text where
-  openObject parent path = do
-    allocate (liftIO $ h5o_open (rawHandle parent) path) (liftIO . h5o_close) >>= \case
-      (k, v) -> openObjectRaw (Handle v k)
+-- instance IsIndex Text where
+--   openObject parent path = do
+--     allocate (liftIO $ h5o_open (rawHandle parent) path) (liftIO . h5o_close) >>= \case
+--       (k, v) -> openObjectRaw (Handle v k)
 
-instance IsIndex Int where
-  openObject parent index =
-    allocate (liftIO $ h5o_open_by_idx (rawHandle parent) index) (liftIO . h5o_close) >>= \case
-      (k, v) -> openObjectRaw (Handle v k)
+-- instance IsIndex Int where
+--   openObject parent index =
+--     allocate (liftIO $ h5o_open_by_idx (rawHandle parent) index) (liftIO . h5o_close) >>= \case
+--       (k, v) -> openObjectRaw (Handle v k)
 
-forceGroup :: (HasCallStack, MonadResource m) => Object t -> m Group
-forceGroup object = case object of
-  (File _) ->
-    allocate (liftIO $ h5o_open (rawHandle object) "/") (liftIO . h5o_close) >>= \case
-      (k, v) -> return (Group (Handle v k))
-  (Group h) -> return (Group h)
-  _ -> error $ show (getName object) <> " is not a Group"
+-- forceGroup :: (HasCallStack, MonadResource m) => Object t -> m Group
+-- forceGroup object = case object of
+--   (File _) ->
+--     allocate (liftIO $ h5o_open (rawHandle object) "/") (liftIO . h5o_close) >>= \case
+--       (k, v) -> return (Group (Handle v k))
+--   (Group h) -> return (Group h)
+--   _ -> error $ show (getName object) <> " is not a Group"
 
-forceDataset :: (HasCallStack, MonadResource m) => Object t -> m Dataset
-forceDataset object = case object of
-  (Dataset h) -> return (Dataset h)
-  _ -> error $ show (getName object) <> " is not a Dataset"
+-- forceDataset :: (HasCallStack, MonadResource m) => Object t -> m Dataset
+-- forceDataset object = case object of
+--   (Dataset h) -> return (Dataset h)
+--   _ -> error $ show (getName object) <> " is not a Dataset"
 
-openGroup :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Group
-openGroup parent index = openObject parent index >>= foldSome forceGroup
+-- openGroup :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Group
+-- openGroup parent index = openObject parent index >>= foldSome forceGroup
 
-openDataset :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Dataset
-openDataset parent index = openObject parent index >>= foldSome forceDataset
+-- openDataset :: (HasCallStack, IsIndex i, MonadResource m) => Group -> i -> m Dataset
+-- openDataset parent index = openObject parent index >>= foldSome forceDataset
 
 getName :: HasCallStack => Object t -> Text
 getName object = System.IO.Unsafe.unsafePerformIO $ h5i_get_name (rawHandle object)
 
-readDataset :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
-readDataset dataset = h5d_read dataset
+-- readDataset :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
+-- readDataset dataset = h5d_read dataset
 
 -- forceDataset object $ \(Dataset h) -> liftIO (h5d_read h)
 
@@ -267,19 +284,38 @@ ofShape shape = simpleDataspace shape
 -- m (a -> b -> m c) -> m a -> m (b -> m c)
 -- m (a -> b -> c -> m d) -> m a -> m (b -> c -> m d)
 
-createDataset :: MonadIO m => Group -> Text -> Dataspace -> Datatype -> m ()
-createDataset parent index dspace dtype =
-  liftIO $ h5d_create (rawHandle parent) index dtype dspace >>= h5o_close
+-- createDataset :: MonadIO m => Group -> Text -> Dataspace -> Datatype -> m ()
+-- createDataset parent index dspace dtype =
+--   liftIO $ h5d_create (rawHandle parent) index dtype dspace >>= h5o_close
 
-writeDataset :: (HasCallStack, KnownDataset a, MonadResource m) => Group -> Text -> a -> m ()
-writeDataset parent index value =
-  withArrayView value $ \view@(ArrayView object_dtype object_dspace _) -> do
-    exists parent index >>= \case
-      False -> do
-        dataset_dspace <- guessDataspace object_dspace
-        createDataset parent index dataset_dspace object_dtype
-      _ -> return ()
-    openObject parent index >>= foldSome forceDataset >>= \object -> h5d_write object view
+createDataset ::
+  forall a m.
+  (HasCallStack, KnownDataset' a, MonadResource m) =>
+  Group ->
+  Text ->
+  a ->
+  m ()
+createDataset parent path object = do
+  alreadyThere <- exists parent path
+  unless alreadyThere $
+    withArrayView' object $ \view -> do
+      memDatatype <- ofType @(ElementOf a)
+      memDataspace <- arrayViewDataspace view
+      dataset <- createDataset' parent path memDatatype memDataspace
+      close dataset
+      close memDataspace
+      close memDatatype
+  open parent path >>= writeDataset object
+
+-- writeDataset :: (HasCallStack, KnownDataset a, MonadResource m) => Group -> Text -> a -> m ()
+-- writeDataset parent index value =
+--   withArrayView value $ \view@(ArrayView object_dtype object_dspace _) -> do
+--     exists parent index >>= \case
+--       False -> do
+--         dataset_dspace <- guessDataspace object_dspace
+--         createDataset parent index dataset_dspace object_dtype
+--       _ -> return ()
+--     openObject parent index >>= foldSome forceDataset >>= \object -> h5d_write object view
 
 delete :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
 delete parent name = liftIO $ h5l_delete (rawHandle parent) name
@@ -290,7 +326,7 @@ deleteAttribute object name = liftIO $ h5a_delete (rawHandle object) name
 getRoot :: (HasCallStack, MonadResource m) => Object t -> m Group
 getRoot object =
   allocate (liftIO $ h5i_get_file_id (rawHandle object)) (liftIO . h5f_close) >>= \case
-    (k, v) -> forceGroup $ File (Handle v k)
+    (k, v) -> pure $ Group (Handle v k)
 
 exists :: forall m. (HasCallStack, MonadResource m) => Group -> Text -> m Bool
 exists parent path

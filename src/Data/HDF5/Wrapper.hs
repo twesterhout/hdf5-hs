@@ -1,5 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.HDF5.Wrapper
@@ -50,8 +51,17 @@ module Data.HDF5.Wrapper
     selectHyperslab,
     prepareStrides,
     slice,
+    sliceDataset,
     readSelectedInplace,
     boundingBox,
+    readDataset,
+    readSelected,
+    readInplace,
+    readSelectedInplace,
+    writeDataset,
+    writeSelected,
+    createDataset',
+    arrayViewDataspace,
     dataspaceSelectionType,
     SelectionType (..),
     readSelectedInplace,
@@ -95,13 +105,15 @@ import Data.Vector.Storable.ByteString
 import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (CString)
 import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
-import Foreign.Marshal.Alloc (allocaBytes)
-import Foreign.Marshal.Array (allocaArray, peekArray, withArrayLen)
+import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, newForeignPtr_, withForeignPtr)
+import Foreign.Marshal.Alloc (allocaBytes, free, mallocBytes)
+import Foreign.Marshal.Array (allocaArray, peekArray, pokeArray, withArrayLen)
 import Foreign.Marshal.Utils (toBool)
-import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullPtr)
+import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullPtr, plusPtr)
 import Foreign.Storable
 import qualified GHC.Show
 import GHC.Stack
+import GHC.TypeLits
 import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
 import qualified System.IO.Unsafe
@@ -691,6 +703,9 @@ h5t_get_size dtype =
   where
     h = rawHandle dtype
 
+datatypeSize :: Datatype -> Int
+datatypeSize = System.IO.Unsafe.unsafePerformIO . h5t_get_size
+
 h5hl_dtype_to_text :: Datatype -> IO Text
 h5hl_dtype_to_text dtype = do
   let h = rawHandle dtype
@@ -706,6 +721,12 @@ h5hl_dtype_to_text dtype = do
               herr_t status = H5LTdtype_to_text($(hid_t x), $(char* buffer), H5LT_DDL, &len);
               return (status < 0) ? status : (hssize_t)len;
             } |]
+
+instance Eq Datatype where
+  (==) a b = System.IO.Unsafe.unsafePerformIO $ h5t_equal a b
+
+instance GHC.Show.Show Datatype where
+  show x = toString . System.IO.Unsafe.unsafePerformIO $ h5hl_dtype_to_text x
 
 checkDatatype ::
   (HasCallStack, MonadIO m) =>
@@ -1027,6 +1048,27 @@ h5d_open parent name =
   where
     c_name = encodeUtf8 name
 
+createDataset' ::
+  (HasCallStack, MonadResource m) =>
+  Group ->
+  Text ->
+  Datatype ->
+  Dataspace ->
+  m Dataset
+createDataset' parent name dtype dspace = do
+  let c_parent = rawHandle parent
+      c_name = encodeUtf8 name
+      c_dtype = rawHandle dtype
+      c_dspace = rawHandle dspace
+      create =
+        withFrozenCallStack $
+          checkError
+            =<< [C.exp| hid_t { H5Dcreate($(hid_t c_parent), $bs-cstr:c_name,
+                                          $(hid_t c_dtype), $(hid_t c_dspace),
+                                          H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT) } |]
+  (k, v) <- allocate (liftIO create) (liftIO . h5o_close)
+  return $ Dataset (Handle v k)
+
 h5d_create :: HasCallStack => Hid -> Text -> Datatype -> Dataspace -> IO Hid
 h5d_create parent name dtype dspace =
   checkError
@@ -1094,20 +1136,35 @@ prepareStrides = snd . foldr combine (1, [])
   where
     combine x (c, ys) = let !y = x `div` c in (x, y : ys)
 
+shouldExpand :: [Int] -> Bool
+shouldExpand [] = False
+shouldExpand strides = Data.List.last strides /= 1
+
 arrayViewHyperslab :: ArrayView' a -> Hyperslab
-arrayViewHyperslab (ArrayView' _ shape strides) =
-  Hyperslab
-    (V.replicate (rank + 1) 0)
-    (V.replicate (rank + 1) 1)
-    (fromList (shape ++ [1]))
-    (V.replicate (rank + 1) 1)
+arrayViewHyperslab (ArrayView' _ shape strides)
+  | shouldExpand strides =
+    Hyperslab
+      (V.replicate (rank + 1) 0)
+      (V.replicate (rank + 1) 1)
+      (fromList (shape ++ [1]))
+      (V.replicate (rank + 1) 1)
+  | otherwise =
+    Hyperslab
+      (V.replicate rank 0)
+      (V.replicate rank 1)
+      (fromList shape)
+      (V.replicate rank 1)
   where
-    !rank = length shape
+    !rank = length strides
 
 boundingBox :: ArrayView' a -> [Int]
-boundingBox (ArrayView' _ shape strides) = case viaNonEmpty head shape of
-  Just h -> (h :) $ prepareStrides strides
-  Nothing -> []
+boundingBox (ArrayView' _ shape strides)
+  | null strides = []
+  | shouldExpand strides = box
+  | otherwise = take rank box
+  where
+    rank = length strides
+    box = Data.List.head shape : prepareStrides strides
 
 -- dataspaceFromHyperslab :: MonadResource m => Hyperslab -> m Dataspace
 -- dataspaceFromHyperslab hyperslab =
@@ -1122,9 +1179,7 @@ boundingBox (ArrayView' _ shape strides) = case viaNonEmpty head shape of
 
 arrayViewDataspace :: (KnownDatatype a, MonadResource m) => ArrayView' a -> m Dataspace
 arrayViewDataspace view@(ArrayView' _ _ strides)
-  | areStridesOkay strides = do
-    liftIO $ print (boundingBox view)
-    liftIO $ print (arrayViewHyperslab view)
+  | areStridesOkay strides =
     selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
   | otherwise = error $ "unsupported strides: " <> show strides
 
@@ -1135,31 +1190,255 @@ processSelection (DatasetSlice dataset hyperslab) = do
   close dataspace
   pure dataspace'
 
-readSelectedInplace ::
+rowMajorStrides :: Integral a => [a] -> [a]
+rowMajorStrides = drop 1 . scanr (*) 1
+
+allocateForDataspace ::
+  forall a m.
+  (MonadResource m, KnownDatatype a) =>
+  Dataspace ->
+  m (ArrayView' a)
+allocateForDataspace dataspace = do
+  dtype <- ofType @a
+  let hyperslab = getHyperslab dataspace
+      elementSize = datatypeSize dtype
+      shape = V.toList $ V.zipWith (*) (hyperslabCount hyperslab) (hyperslabBlock hyperslab)
+      totalSize = elementSize * product shape
+  ptr <- liftIO $ mallocForeignPtrBytes totalSize
+  let !r = ArrayView' ptr shape (rowMajorStrides shape)
+  close dtype
+  pure r
+
+instance KnownDatatype a => KnownDataset' (ArrayView' a) where
+  fromArrayView' = pure
+  withArrayView' x action = action x
+
+instance (KnownDatatype a, Storable a) => KnownDataset' (Vector a) where
+  fromArrayView' (ArrayView' fp [size] [1]) = pure $ V.unsafeFromForeignPtr0 fp size
+  fromArrayView' (ArrayView' fp [size] [stride])
+    | size <= 0 = pure V.empty
+    | otherwise = liftIO $ do
+      buffer <- MV.new size
+      withForeignPtr fp $ \ptr ->
+        forM_ [0 .. size - 1] $ \i ->
+          MV.write buffer i =<< peekElemOff ptr (i * stride)
+      V.unsafeFreeze buffer
+  fromArrayView' (ArrayView' _ shape strides) =
+    error $
+      "expected a 1-dimensional array, but shape and strides were "
+        <> show shape
+        <> " and "
+        <> show strides
+        <> " respectively"
+  withArrayView' v action = action $ ArrayView' fp [n] [1]
+    where
+      (fp, n) = V.unsafeToForeignPtr0 v
+
+_listFromArrayView1D ::
+  (HasCallStack, KnownDatatype a, Storable a, MonadResource m) =>
+  ArrayView' a ->
+  m [a]
+_listFromArrayView1D view = V.toList <$> fromArrayView' view
+
+_listWithArrayView1D ::
+  (HasCallStack, KnownDatatype a, Storable a, MonadResource m) =>
+  [a] ->
+  (ArrayView' a -> m b) ->
+  m b
+_listWithArrayView1D xs action = withArrayView' (V.fromList xs) action
+
+_listFromArrayView2D ::
+  forall a m.
+  (HasCallStack, Storable a, MonadResource m) =>
+  ArrayView' a ->
+  m [[a]]
+_listFromArrayView2D (ArrayView' fp [d₁, d₂] [s₁, s₂])
+  | d₁ <= 0 = pure []
+  | otherwise = liftIO . withForeignPtr fp $ \ptr -> loop₁ ptr (d₁ - 1) []
+  where
+    elemSize = let (_x :: a) = _x in sizeOf _x
+    loop₂ ptr 0 acc = do !e <- peekElemOff ptr 0; pure (e : acc)
+    loop₂ ptr j acc = do !e <- peekElemOff ptr (j * s₂); loop₂ ptr (j - 1) (e : acc)
+    readRow ptr i
+      | d₁ <= 0 = pure []
+      | otherwise = loop₂ (ptr `plusPtr` (i * s₁ * elemSize)) (d₂ - 1) []
+    loop₁ ptr 0 acc = do e <- readRow ptr 0; pure (e : acc)
+    loop₁ ptr i acc = do e <- readRow ptr i; loop₁ ptr (i - 1) (e : acc)
+_listFromArrayView2D (ArrayView' _ shape strides) =
+  error $
+    "expected a 2-dimensional array, but shape and strides were "
+      <> show shape
+      <> " and "
+      <> show strides
+      <> " respectively"
+
+_listWithArrayView2D ::
+  forall a m b.
+  (HasCallStack, Storable a, MonadResource m) =>
+  [[a]] ->
+  (ArrayView' a -> m b) ->
+  m b
+_listWithArrayView2D xs action
+  | d₁ == 0 = do
+    fp <- liftIO $ newForeignPtr_ nullPtr
+    action (ArrayView' fp [0, 0] [1, 1])
+  | d₂ == 0 = do
+    fp <- liftIO $ newForeignPtr_ nullPtr
+    action (ArrayView' fp [d₁, 0] [1, 1])
+  | otherwise = do
+    unless (all ((== d₂) . length) (drop 1 xs)) $
+      error $ "nested list is not a matrix"
+    fp <- liftIO $ mallocForeignPtrBytes (d₁ * d₂ * elemSize)
+    liftIO . withForeignPtr fp $ \ptr -> pokeArray ptr (concat xs)
+    action (ArrayView' fp [d₁, d₂] [d₂, 1])
+  where
+    d₁ = length xs
+    d₂ = length (Data.List.head xs)
+    elemSize = let (_x :: a) = _x in sizeOf _x
+
+class (KnownNat d, KnownDatatype (ElementOf a)) => ListKnownDataset (d :: Nat) (a :: Type) where
+  listFromArrayView :: MonadResource m => proxy d -> ArrayView' (ElementOf a) -> m a
+  listWithArrayView :: MonadResource m => proxy d -> a -> (ArrayView' (ElementOf a) -> m b) -> m b
+
+instance (ElementOf [a] ~ a, KnownDatatype a, Storable a) => ListKnownDataset 1 [a] where
+  listFromArrayView _ = _listFromArrayView1D
+  listWithArrayView _ = _listWithArrayView1D
+
+instance (ElementOf [[a]] ~ a, KnownDatatype a, Storable a) => ListKnownDataset 2 [[a]] where
+  listFromArrayView _ = _listFromArrayView2D
+  listWithArrayView _ = _listWithArrayView2D
+
+type family IsFinal a where
+  IsFinal [a] = 'False
+  IsFinal a = 'True
+
+type family ListElement' a b where
+  ListElement' a 'True = a
+  ListElement' [a] 'False = ListElement' a (IsFinal a)
+
+type ListElement (a :: Type) = ListElement' a (IsFinal a)
+
+type family ListDimension' (n :: Nat) (a :: Type) where
+  ListDimension' n [a] = ListDimension' (n + 1) a
+  ListDimension' n a = n
+
+type ListDimension (a :: Type) = ListDimension' 0 a
+
+type instance ElementOf (ArrayView' a) = a
+
+type instance ElementOf (Vector a) = a
+
+type instance ElementOf [a] = ListElement [a]
+
+instance ListKnownDataset (ListDimension [t]) [t] => KnownDataset' [t] where
+  fromArrayView' = listFromArrayView (Proxy :: Proxy (ListDimension [t]))
+  withArrayView' = listWithArrayView (Proxy :: Proxy (ListDimension [t]))
+
+readDataset :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> m a
+readDataset dataset = readDatasetImpl dataset =<< getDataspace dataset
+
+readSelected :: forall a m. (KnownDataset' a, MonadResource m) => DatasetSlice -> m a
+readSelected selection@(DatasetSlice dataset _) =
+  readDatasetImpl dataset =<< processSelection selection
+
+readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
+readDatasetImpl dataset dataspace = do
+  view <- allocateForDataspace @(ElementOf a) dataspace
+  readInplace view dataset dataspace
+  !array <- fromArrayView' view
+  pure array
+
+readSelectedInplace :: (MonadResource m, KnownDatatype a) => ArrayView' a -> DatasetSlice -> m ()
+readSelectedInplace view selection@(DatasetSlice dataset _) = do
+  dataspace <- processSelection selection
+  readInplace view dataset dataspace
+  close dataspace
+
+readInplace ::
   forall a m.
   (MonadResource m, KnownDatatype a) =>
   ArrayView' a ->
+  Dataset ->
+  Dataspace ->
+  m ()
+readInplace view@(ArrayView' fp shape stride) dataset dataspace = do
+  fileDatatype <- getDatatype dataset
+  memDatatype <- ofType @a
+  unless (fileDatatype == memDatatype) $
+    error $
+      "datatype mismatch: you are trying to read "
+        <> show memDatatype
+        <> " from a dataset containing "
+        <> show fileDatatype
+  memDataspace <- arrayViewDataspace view
+  let c_dataset = rawHandle dataset
+      c_mem_type = rawHandle memDatatype
+      c_mem_space = rawHandle memDataspace
+      c_file_space = rawHandle dataspace
+  !_ <-
+    liftIO . withForeignPtr fp $ \ptr -> do
+      let c_buf = castPtr ptr
+      checkError
+        =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_mem_type), $(hid_t c_mem_space),
+                                   $(hid_t c_file_space), H5P_DEFAULT, $(void* c_buf)) } |]
+  close fileDatatype
+  close memDatatype
+  close memDataspace
+
+writeDatasetImpl ::
+  forall a m.
+  (HasCallStack, KnownDataset' a, MonadResource m) =>
+  Dataset ->
+  Dataspace ->
+  a ->
+  m ()
+writeDatasetImpl dataset dataspace object = do
+  fileDatatype <- getDatatype dataset
+  memDatatype <- ofType @(ElementOf a)
+  unless (fileDatatype == memDatatype) $
+    error $
+      "datatype mismatch: you are trying to write "
+        <> show memDatatype
+        <> " to a dataset containing "
+        <> show fileDatatype
+  withArrayView' object $ \view@(ArrayView' fp _ _) -> do
+    memDataspace <- arrayViewDataspace view
+    let c_dataset = rawHandle dataset
+        c_mem_type = rawHandle memDatatype
+        c_mem_space = rawHandle memDataspace
+        c_file_space = rawHandle dataspace
+    !_ <-
+      liftIO . withForeignPtr fp $ \ptr -> do
+        let c_buf = castPtr ptr
+        checkError
+          =<< [C.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_mem_type),
+                                        $(hid_t c_mem_space), $(hid_t c_file_space),
+                                        H5P_DEFAULT, $(const void* c_buf)) } |]
+    close memDataspace
+  close fileDatatype
+  close memDatatype
+
+writeDataset ::
+  forall a m.
+  (HasCallStack, KnownDataset' a, MonadResource m) =>
+  a ->
+  Dataset ->
+  m ()
+writeDataset object dataset = do
+  dataspace <- getDataspace dataset
+  writeDatasetImpl dataset dataspace object
+  close dataspace
+
+writeSelected ::
+  forall a m.
+  (HasCallStack, KnownDataset' a, MonadResource m) =>
+  a ->
   DatasetSlice ->
   m ()
-readSelectedInplace
-  view@(ArrayView' ptr shape stride)
-  selection@(DatasetSlice dataset hyperslab) = do
-    destDatatype <- ofType @a
-    destDataspace <- arrayViewDataspace view
-    sourceDataspace <- processSelection selection
-    liftIO $ print 2
-    liftIO $ print hyperslab
-    let c_dataset = rawHandle dataset
-        c_mem_type = rawHandle destDatatype
-        c_mem_space = rawHandle destDataspace
-        c_file_space = rawHandle sourceDataspace
-        c_buf = castPtr ptr
-    !_ <-
-      liftIO $
-        checkError
-          =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_mem_type), $(hid_t c_mem_space),
-                                   $(hid_t c_file_space), H5P_DEFAULT, $(void* c_buf)) } |]
-    return ()
+writeSelected object selection@(DatasetSlice dataset _) = do
+  dataspace <- processSelection selection
+  writeDatasetImpl dataset dataspace object
+  close dataspace
 
 h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 h5d_read dataset = do

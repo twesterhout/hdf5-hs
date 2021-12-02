@@ -12,6 +12,8 @@ module Data.HDF5.Types
     Attribute (..),
     ArrayView (..),
     ArrayView' (..),
+    KnownDataset' (..),
+    ElementOf (..),
     DatasetSlice (..),
     Hyperslab (..),
     KnownDatatype (..),
@@ -38,7 +40,7 @@ import Control.Monad.ST (RealWorld)
 import Control.Monad.Trans.Resource
 import Data.Vector.Storable (MVector, Vector)
 import Foreign.C.Types (CInt, CUInt)
-import Foreign.Ptr (Ptr)
+import Foreign.ForeignPtr (ForeignPtr)
 import Prelude hiding (Handle)
 
 type Haddr = Word64
@@ -135,7 +137,7 @@ instance CanClose Datatype where
 class KnownDatatype a where
   ofType :: MonadResource m => m Datatype
 
-data ArrayView' a = ArrayView' !(Ptr a) ![Int] ![Int]
+data ArrayView' a = ArrayView' !(ForeignPtr a) ![Int] ![Int]
 
 data Hyperslab = Hyperslab
   { hyperslabStart :: Vector Int,
@@ -148,6 +150,19 @@ data Hyperslab = Hyperslab
 data DatasetSlice = DatasetSlice !Dataset !Hyperslab
 
 data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
+
+type family ElementOf a
+
+class KnownDatatype (ElementOf a) => KnownDataset' a where
+  withArrayView' ::
+    (HasCallStack, MonadResource m) =>
+    a ->
+    (ArrayView' (ElementOf a) -> m b) ->
+    m b
+  fromArrayView' ::
+    (HasCallStack, MonadResource m) =>
+    ArrayView' (ElementOf a) ->
+    m a
 
 class KnownDataset a where
   withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
