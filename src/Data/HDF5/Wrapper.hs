@@ -52,6 +52,7 @@ module Data.HDF5.Wrapper
     selectHyperslab,
     prepareStrides,
     slice,
+    sliceWithHyperslab,
     toSelection,
     sliceDataset,
     readSelectedInplace,
@@ -1063,6 +1064,9 @@ toSelection :: HasCallStack => Dataset -> DatasetSlice
 toSelection dataset =
   System.IO.Unsafe.unsafePerformIO . runHDF5 $ do
     DatasetSlice dataset . toHyperslab <$> getDataspace dataset
+
+sliceWithHyperslab :: HasCallStack => Hyperslab -> Dataset -> DatasetSlice
+sliceWithHyperslab hyperslab dataset = DatasetSlice dataset hyperslab
 
 class CanSlice t where
   slice :: Int -> Int -> Int -> Int -> t -> DatasetSlice
