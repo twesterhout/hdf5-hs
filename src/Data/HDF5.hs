@@ -35,6 +35,7 @@ module Data.HDF5
     slice,
     sliceDataset,
     sliceWithHyperslab,
+    Hyperslab (..),
     open,
     openByIndex,
     -- SelectionType (..),
