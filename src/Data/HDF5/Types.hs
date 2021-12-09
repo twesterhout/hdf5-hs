@@ -38,6 +38,7 @@ where
 
 import Control.Monad.ST (RealWorld)
 import Control.Monad.Trans.Resource
+import Control.Monad.Trans.Resource.Internal (ReleaseKey (..))
 import Data.Vector.Storable (MVector, Vector)
 import Foreign.C.Types (CInt, CUInt)
 import Foreign.ForeignPtr (ForeignPtr)
@@ -79,6 +80,12 @@ data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
 
 data Handle = Handle {-# UNPACK #-} !Hid {-# UNPACK #-} !ReleaseKey
 
+instance NFData Handle where
+  rnf (Handle a (ReleaseKey b c)) =
+    case rnf a of
+      () -> case rnf b of
+        () -> rnf c
+
 -- | A HDF5 object.
 data Object (k :: ObjectType) where
   File :: {-# UNPACK #-} !Handle -> Object 'FileTy
@@ -87,6 +94,12 @@ data Object (k :: ObjectType) where
   Datatype :: {-# UNPACK #-} !Handle -> Object 'DatatypeTy
 
 deriving instance Typeable (Object k)
+
+instance NFData (Object k) where
+  rnf (File h) = rnf h
+  rnf (Group h) = rnf h
+  rnf (Dataset h) = rnf h
+  rnf (Datatype h) = rnf h
 
 newtype Dataspace = Dataspace Handle
 
@@ -140,14 +153,17 @@ class KnownDatatype a where
 data ArrayView' a = ArrayView' !(ForeignPtr a) ![Int] ![Int]
 
 data Hyperslab = Hyperslab
-  { hyperslabStart :: Vector Int,
-    hyperslabStride :: Vector Int,
-    hyperslabCount :: Vector Int,
-    hyperslabBlock :: Vector Int
+  { hyperslabStart :: !(Vector Int),
+    hyperslabStride :: !(Vector Int),
+    hyperslabCount :: !(Vector Int),
+    hyperslabBlock :: !(Vector Int)
   }
-  deriving stock (Read, Show, Eq)
+  deriving stock (Read, Show, Eq, Generic)
+  deriving anyclass (NFData)
 
 data DatasetSlice = DatasetSlice !Dataset !Hyperslab
+  deriving stock (Generic)
+  deriving anyclass (NFData)
 
 data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 

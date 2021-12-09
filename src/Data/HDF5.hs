@@ -75,7 +75,8 @@ where
 
 import Control.Exception.Safe hiding (handle)
 import Control.Monad.IO.Unlift
-import Control.Monad.Trans.Resource
+-- import Control.Monad.Trans.Resource
+
 import Data.Coerce
 import Data.Constraint
 import Data.HDF5.Types
@@ -85,6 +86,7 @@ import qualified Data.Text as T
 import Data.Typeable (eqT, (:~:) (..))
 import System.Directory (doesFileExist)
 import qualified System.IO.Unsafe (unsafePerformIO)
+import UnliftIO.Resource
 import qualified Unsafe.Coerce
 import Prelude hiding (Handle, find, first, group, withFile)
 
@@ -126,7 +128,7 @@ openFile path flags = do
 
 -- | [bracket](https://wiki.haskell.org/Bracket_pattern) for HDF5 files.
 withFile' ::
-  (HasCallStack, MonadUnliftIO m) =>
+  (HasCallStack, MonadUnliftIO m, NFData a) =>
   -- | filename
   Text ->
   -- | mode in which to open the file
@@ -134,12 +136,10 @@ withFile' ::
   -- | action to perform
   (File -> ResourceT m a) ->
   m a
-withFile' path flags action =
-  runResourceT $
-    openFile path flags >>= action
+withFile' path flags action = runHDF5 $ openFile path flags >>= action
 
 withFile ::
-  (HasCallStack, MonadUnliftIO m) =>
+  (HasCallStack, MonadUnliftIO m, NFData a) =>
   -- | filename
   Text ->
   -- | mode in which to open the file
