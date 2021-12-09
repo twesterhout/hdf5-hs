@@ -77,6 +77,8 @@ module Data.HDF5.Wrapper
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
     getDataspace,
+    datasetRank,
+    datasetShape,
 
     -- * Attributes
     h5a_open,
@@ -1499,6 +1501,16 @@ writeSelected object selection@(DatasetSlice dataset _) = do
   dataspace <- processSelection selection
   writeDatasetImpl dataset dataspace object
   close dataspace
+
+datasetRank :: HasCallStack => Dataset -> Int
+datasetRank dataset =
+  System.IO.Unsafe.unsafePerformIO . runHDF5 $
+    return . dataspaceRank =<< getDataspace dataset
+
+datasetShape :: HasCallStack => Dataset -> [Int]
+datasetShape dataset =
+  System.IO.Unsafe.unsafePerformIO . runHDF5 $
+    return . dataspaceShape =<< getDataspace dataset
 
 h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
 h5d_read dataset = do
