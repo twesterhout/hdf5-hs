@@ -55,7 +55,6 @@ module Data.HDF5.Wrapper
     sliceWithHyperslab,
     toSelection,
     sliceDataset,
-    readSelectedInplace,
     boundingBox,
     readDataset,
     readSelected,
@@ -67,7 +66,6 @@ module Data.HDF5.Wrapper
     arrayViewDataspace,
     dataspaceSelectionType,
     SelectionType (..),
-    readSelectedInplace,
 
     -- * Datasets
     h5d_open,
@@ -1402,24 +1400,28 @@ readSelected selection@(DatasetSlice dataset _) =
 readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
 readDatasetImpl dataset dataspace = do
   view <- allocateForDataspace @(ElementOf a) dataspace
-  readInplace view dataset dataspace
+  readInplaceImpl view dataset dataspace
   !array <- fromArrayView' view
   pure array
 
-readSelectedInplace :: (MonadResource m, KnownDatatype a) => ArrayView' a -> DatasetSlice -> m ()
-readSelectedInplace view selection@(DatasetSlice dataset _) = do
+readInplace :: (MonadResource m, KnownDataset' a) => a -> Dataset -> m ()
+readInplace x dataset = readSelectedInplace x (toSelection dataset)
+
+readSelectedInplace :: (MonadResource m, KnownDataset' a) => a -> DatasetSlice -> m ()
+readSelectedInplace x selection@(DatasetSlice dataset _) = do
   dataspace <- processSelection selection
-  readInplace view dataset dataspace
+  withArrayView' x $ \view ->
+    readInplaceImpl view dataset dataspace
   close dataspace
 
-readInplace ::
+readInplaceImpl ::
   forall a m.
   (MonadResource m, KnownDatatype a) =>
   ArrayView' a ->
   Dataset ->
   Dataspace ->
   m ()
-readInplace view@(ArrayView' fp shape stride) dataset dataspace = do
+readInplaceImpl view@(ArrayView' fp shape stride) dataset dataspace = do
   fileDatatype <- getDatatype dataset
   memDatatype <- ofType @a
   unless (fileDatatype == memDatatype) $
