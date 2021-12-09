@@ -49,6 +49,8 @@ module Data.HDF5
     writeSelected,
     createDataset,
     createDataset',
+    datasetRank,
+    datasetShape,
     -- dataspaceSelectionType,
     Datatype,
     Dataspace,
