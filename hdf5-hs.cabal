@@ -17,6 +17,11 @@ tested-with:         GHC == 8.8.4
                      GHC == 8.10.3
                      -- GHC == 8.6.5
 
+flag use-pkgconfig
+  description: Use pkg-config to find HDF5 and ZLib
+  manual: True
+  default: False
+
 source-repository head
   type:                git
   location:            https://github.com/twesterhout/hdf5-hs.git
@@ -97,13 +102,14 @@ library
                      , Data.HDF5
                      -- , Data.HDF5.Internal
   cc-options:          -Wall -Wextra
-  if os(darwin) || os(osx)
-    extra-libraries:   hdf5_hl
-                       hdf5
-  else
+  if flag(use-pkgconfig)
     extra-libraries:   hdf5_hl
     pkgconfig-depends: hdf5
-                     , zlib
+  else
+    extra-libraries:   hdf5_hl
+                     , hdf5
+  if !(os(darwin) || os(osx))
+    extra-libraries:   z
 
 -- executable hdf5-hs
 --   import:              common-options
