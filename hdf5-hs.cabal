@@ -108,6 +108,9 @@ library
   else
     extra-libraries:   hdf5_hl
                      , hdf5
+    if os(linux)
+      extra-lib-dirs:  /usr/lib/x86_64-linux-gnu/hdf5/serial
+      include-dirs:    /usr/include/hdf5/serial
   if !(os(darwin) || os(osx))
     extra-libraries:   z
 
