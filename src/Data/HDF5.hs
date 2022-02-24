@@ -48,7 +48,7 @@ module Data.HDF5
     writeDataset,
     writeSelected,
     createDataset,
-    createDataset',
+    createEmptyDataset,
     datasetRank,
     datasetShape,
     -- dataspaceSelectionType,
@@ -57,8 +57,8 @@ module Data.HDF5
     ofShape,
     ofType,
     Attribute,
-    readAttribute,
-    writeAttribute,
+    -- readAttribute,
+    -- writeAttribute,
     getName,
     exists,
     existsAttribute,
@@ -67,11 +67,11 @@ module Data.HDF5
     deleteAttribute,
     H5Exception (..),
     KnownDatatype (..),
-    KnownDataset (..),
+    -- KnownDataset (..),
     KnownDataset' (..),
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
-    ArrayView (..),
+    -- ArrayView (..),
     MonadResource,
     disableDiagOutput,
   )
@@ -305,8 +305,12 @@ createDataset parent path object = do
     withArrayView' object $ \view -> do
       memDatatype <- ofType @(ElementOf a)
       memDataspace <- arrayViewDataspace view
-      dataset <- createDataset' parent path memDatatype memDataspace
+      fileDataspace <- ofShape (dataspaceShape memDataspace)
+      trace (show (dataspaceShape fileDataspace)) $ pure ()
+      dataset <- createEmptyDataset parent path memDatatype fileDataspace
+      -- These are purely an optimization
       close dataset
+      close fileDataspace
       close memDataspace
       close memDatatype
   open parent path >>= writeDataset object
@@ -351,17 +355,17 @@ exists parent path
 existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
 existsAttribute object name = liftIO $ h5a_exists (rawHandle object) name
 
-readAttribute ::
-  (HasCallStack, KnownDataset a, MonadResource m) =>
-  Object t ->
-  Text ->
-  m a
-readAttribute object name = h5a_read (rawHandle object) name
+-- readAttribute ::
+--   (HasCallStack, KnownDataset a, MonadResource m) =>
+--   Object t ->
+--   Text ->
+--   m a
+-- readAttribute object name = h5a_read (rawHandle object) name
 
-writeAttribute ::
-  (HasCallStack, KnownDataset a, MonadResource m) =>
-  Object t ->
-  Text ->
-  a ->
-  m ()
-writeAttribute object name value = h5a_write (rawHandle object) name value
+-- writeAttribute ::
+--   (HasCallStack, KnownDataset a, MonadResource m) =>
+--   Object t ->
+--   Text ->
+--   a ->
+--   m ()
+-- writeAttribute object name value = h5a_write (rawHandle object) name value

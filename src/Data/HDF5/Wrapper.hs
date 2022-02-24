@@ -47,6 +47,7 @@ module Data.HDF5.Wrapper
     simpleDataspace,
     scalarDataspace,
     guessDataspace,
+    dataspaceShape,
     toHyperslab,
     sliceHyperslab,
     selectHyperslab,
@@ -62,7 +63,7 @@ module Data.HDF5.Wrapper
     readSelectedInplace,
     writeDataset,
     writeSelected,
-    createDataset',
+    createEmptyDataset,
     arrayViewDataspace,
     dataspaceSelectionType,
     SelectionType (..),
@@ -72,8 +73,8 @@ module Data.HDF5.Wrapper
     h5d_create,
     h5d_get_space,
     h5d_get_type,
-    h5d_read,
-    h5d_write,
+    -- h5d_read,
+    -- h5d_write,
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
     getDataspace,
@@ -83,8 +84,8 @@ module Data.HDF5.Wrapper
     -- * Attributes
     h5a_open,
     h5a_create,
-    h5a_read,
-    h5a_write,
+    -- h5a_read,
+    -- h5a_write,
     h5a_exists,
     h5a_delete,
 
@@ -587,35 +588,35 @@ getTextDatatype =
   allocate (liftIO createTextDatatype) (liftIO . h5o_close) >>= \case
     (k, h) -> return $ Datatype (Handle h k)
 
-withArrayViewStorable ::
-  forall a m b.
-  (Storable a, KnownDatatype a, MonadResource m) =>
-  a ->
-  (ArrayView -> m b) ->
-  m b
-withArrayViewStorable x action = do
-  dtype <- ofType @a
-  dspace <- scalarDataspace
-  buffer <- liftIO . V.unsafeThaw . V.singleton $ x
-  r <- action (ArrayView dtype dspace (MV.unsafeCast buffer))
-  close dspace
-  close dtype
-  return r
+-- withArrayViewStorable ::
+--   forall a m b.
+--   (Storable a, KnownDatatype a, MonadResource m) =>
+--   a ->
+--   (ArrayView -> m b) ->
+--   m b
+-- withArrayViewStorable x action = do
+--   dtype <- ofType @a
+--   dspace <- scalarDataspace
+--   buffer <- liftIO . V.unsafeThaw . V.singleton $ x
+--   r <- action (ArrayView dtype dspace (MV.unsafeCast buffer))
+--   close dspace
+--   close dtype
+--   return r
 
-peekArrayViewStorable ::
-  forall a m.
-  (HasCallStack, Storable a, KnownDatatype a, MonadResource m) =>
-  ArrayView ->
-  m a
-peekArrayViewStorable (ArrayView dtype dspace buffer) = do
-  ofType @a >>= \object_dtype ->
-    checkDatatype object_dtype dtype >> close object_dtype
-  scalarDataspace >>= \object_dspace -> do
-    isSame <- h5s_extent_equal object_dspace dspace
-    unless isSame $
-      error "dataspace extents do not match; expected a scalar dataspace"
-    close object_dspace
-  liftIO $ MV.read (MV.unsafeCast buffer) 0
+-- peekArrayViewStorable ::
+--   forall a m.
+--   (HasCallStack, Storable a, KnownDatatype a, MonadResource m) =>
+--   ArrayView ->
+--   m a
+-- peekArrayViewStorable (ArrayView dtype dspace buffer) = do
+--   ofType @a >>= \object_dtype ->
+--     checkDatatype object_dtype dtype >> close object_dtype
+--   scalarDataspace >>= \object_dspace -> do
+--     isSame <- h5s_extent_equal object_dspace dspace
+--     unless isSame $
+--       error "dataspace extents do not match; expected a scalar dataspace"
+--     close object_dspace
+--   liftIO $ MV.read (MV.unsafeCast buffer) 0
 
 instance KnownDatatype Int32 where ofType = getStaticDatatype h5t_NATIVE_INT32
 
@@ -646,85 +647,85 @@ instance KnownDatatype String where ofType = getTextDatatype
 
 instance KnownDatatype ByteString where ofType = getTextDatatype
 
-instance KnownDataset Int32 where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Int32 where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Int64 where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Int64 where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Int where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Int where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Word32 where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Word32 where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Word64 where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Word64 where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset CFloat where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset CFloat where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Float where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Float where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset CDouble where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset CDouble where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset Double where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset Double where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset (Complex CFloat) where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset (Complex CFloat) where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset (Complex Float) where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset (Complex Float) where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset (Complex CDouble) where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset (Complex CDouble) where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-instance KnownDataset (Complex Double) where
-  withArrayView = withArrayViewStorable
-  peekArrayView = peekArrayViewStorable
+-- instance KnownDataset (Complex Double) where
+--   withArrayView = withArrayViewStorable
+--   peekArrayView = peekArrayViewStorable
 
-withArrayViewString :: (HasCallStack, MonadResource m) => ByteString -> (ArrayView -> m b) -> m b
-withArrayViewString x action = do
-  dtype <- getTextDatatype
-  dspace <- scalarDataspace
-  buffer <- liftIO . V.unsafeThaw $ byteStringToVector x
-  r <- action (ArrayView dtype dspace buffer)
-  close dspace
-  close dtype
-  return r
+-- withArrayViewString :: (HasCallStack, MonadResource m) => ByteString -> (ArrayView -> m b) -> m b
+-- withArrayViewString x action = do
+--   dtype <- getTextDatatype
+--   dspace <- scalarDataspace
+--   buffer <- liftIO . V.unsafeThaw $ byteStringToVector x
+--   r <- action (ArrayView dtype dspace buffer)
+--   close dspace
+--   close dtype
+--   return r
 
-peekArrayViewString :: (HasCallStack, MonadResource m) => ArrayView -> m ByteString
-peekArrayViewString (ArrayView dtype dspace buffer) = do
-  getTextDatatype >>= \object_dtype ->
-    checkDatatype object_dtype dtype >> close object_dtype
-  scalarDataspace >>= \object_dspace -> do
-    isSame <- h5s_extent_equal object_dspace dspace
-    unless isSame $ error "dataspace extents do not match; expected a scalar dataspace"
-    close object_dspace
-  liftIO $ vectorToByteString <$> V.unsafeFreeze buffer
+-- peekArrayViewString :: (HasCallStack, MonadResource m) => ArrayView -> m ByteString
+-- peekArrayViewString (ArrayView dtype dspace buffer) = do
+--   getTextDatatype >>= \object_dtype ->
+--     checkDatatype object_dtype dtype >> close object_dtype
+--   scalarDataspace >>= \object_dspace -> do
+--     isSame <- h5s_extent_equal object_dspace dspace
+--     unless isSame $ error "dataspace extents do not match; expected a scalar dataspace"
+--     close object_dspace
+--   liftIO $ vectorToByteString <$> V.unsafeFreeze buffer
 
-instance KnownDataset ByteString where
-  withArrayView = withArrayViewString
-  peekArrayView = peekArrayViewString
+-- instance KnownDataset ByteString where
+--   withArrayView = withArrayViewString
+--   peekArrayView = peekArrayViewString
 
-instance KnownDataset Text where
-  withArrayView x = withArrayViewString (encodeUtf8 x :: ByteString)
-  peekArrayView = (return . decodeUtf8) <=< peekArrayViewString
+-- instance KnownDataset Text where
+--   withArrayView x = withArrayViewString (encodeUtf8 x :: ByteString)
+--   peekArrayView = (return . decodeUtf8) <=< peekArrayViewString
 
 h5t_equal :: HasCallStack => Datatype -> Datatype -> IO Bool
 h5t_equal dtype1 dtype2 = fromHtri =<< [CU.exp| htri_t { H5Tequal($(hid_t h1), $(hid_t h2)) } |]
@@ -847,9 +848,15 @@ dataspaceRank dataspace =
     System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_ndims dataspace)
 
 dataspaceShape :: HasCallStack => Dataspace -> [Int]
-dataspaceShape dataspace =
-  withFrozenCallStack $
-    System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_dims dataspace)
+dataspaceShape dataspace = case dataspaceSelectionType dataspace of
+  SelectedNone -> replicate (dataspaceRank dataspace) 0
+  SelectedAll ->
+    withFrozenCallStack $
+      System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_dims dataspace)
+  _ ->
+    if isRegularHyperslab dataspace
+      then hyperslabShape . toHyperslab $ dataspace
+      else error "cannot determine the size of not regularly-shaped selection"
 
 h5s_get_simple_extent_dims :: HasCallStack => Dataspace -> IO [Int]
 h5s_get_simple_extent_dims dspace = do
@@ -954,11 +961,21 @@ toUnsigned x
 hyperslabRank :: Hyperslab -> Int
 hyperslabRank = V.length . hyperslabStart
 
+hyperslabShape :: Hyperslab -> [Int]
+hyperslabShape h = V.toList $ V.zipWith (*) (hyperslabBlock h) (hyperslabCount h)
+
 toHyperslab :: HasCallStack => Dataspace -> Hyperslab
 toHyperslab dspace =
   case dataspaceSelectionType dspace of
     SelectedNone -> error "nothing is selected"
     SelectedPoints -> error "points selection cannot be represented as a hyperslab"
+    SelectedAll ->
+      let shape = dataspaceShape dspace
+       in Hyperslab
+            (V.replicate rank 0)
+            (V.replicate rank 1)
+            (fromList shape)
+            (V.replicate rank 1)
     SelectedHyperslabs -> System.IO.Unsafe.unsafePerformIO $ do
       unless (isRegularHyperslab dspace) $
         error "non-regular hyperslab cannot be converted to regular hyperslab"
@@ -985,15 +1002,8 @@ toHyperslab dspace =
           (V.map fromIntegral stride')
           (V.map fromIntegral count')
           (V.map fromIntegral block')
-    SelectedAll ->
-      Hyperslab
-        (V.replicate rank 0)
-        (V.replicate rank 1)
-        (fromList shape)
-        (V.replicate rank 1)
   where
     rank = dataspaceRank dspace
-    shape = dataspaceShape dspace
 
 checkSliceArguments :: Hyperslab -> Int -> Int -> Int -> Int -> a -> a
 checkSliceArguments hyperslab dim start count stride
@@ -1106,14 +1116,14 @@ h5d_open parent name =
   where
     c_name = encodeUtf8 name
 
-createDataset' ::
+createEmptyDataset ::
   (HasCallStack, MonadResource m) =>
   Group ->
   Text ->
   Datatype ->
   Dataspace ->
   m Dataset
-createDataset' parent name dtype dspace = do
+createEmptyDataset parent name dtype dspace = do
   let c_parent = rawHandle parent
       c_name = encodeUtf8 name
       c_dtype = rawHandle dtype
@@ -1237,8 +1247,12 @@ boundingBox (ArrayView' _ shape strides)
 
 arrayViewDataspace :: (KnownDatatype a, MonadResource m) => ArrayView' a -> m Dataspace
 arrayViewDataspace view@(ArrayView' _ _ strides)
-  | areStridesOkay strides =
-    selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
+  | areStridesOkay strides = do
+    r <- selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
+    s1 <- dataspaceShape <$> simpleDataspace (boundingBox view)
+    let s2 = dataspaceShape r
+    trace (show (s1, s2, toHyperslab r)) $ pure ()
+    pure r
   | otherwise = error $ "unsupported strides: " <> show strides
 
 processSelection :: MonadResource m => DatasetSlice -> m Dataspace
@@ -1512,121 +1526,132 @@ datasetShape dataset =
   System.IO.Unsafe.unsafePerformIO . runHDF5 $
     return . dataspaceShape =<< getDataspace dataset
 
-h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
-h5d_read dataset = do
-  dtype <-
-    allocate (liftIO $ h5d_get_type dataset) (liftIO . h5o_close) >>= \case
-      (k, v) -> return $ Datatype (Handle v k)
-  dspace <-
-    allocate (liftIO $ h5d_get_space dataset) (liftIO . h5s_close) >>= \case
-      (k, v) -> return $ Dataspace (Handle v k)
-  sizeInBytes <- bufferSizeFor dtype dspace
-  buffer <- liftIO $ MV.unsafeNew sizeInBytes
-  let c_dataset = rawHandle dataset
-      c_dtype = rawHandle dtype
-      c_dspace = rawHandle dspace
-  !_ <- liftIO $
-    MV.unsafeWith buffer $ \bufferPtr ->
-      checkError
-        =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_dtype), $(hid_t c_dspace),
-                                   $(hid_t c_dspace), H5P_DEFAULT,
-                                   (void*)$(uint8_t* bufferPtr)) } |]
-  value <- peekArrayView $ ArrayView dtype dspace buffer
-  close dtype
-  close dspace
-  return value
+-- h5d_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Dataset -> m a
+-- h5d_read dataset = do
+--   dtype <-
+--     allocate (liftIO $ h5d_get_type dataset) (liftIO . h5o_close) >>= \case
+--       (k, v) -> return $ Datatype (Handle v k)
+--   dspace <-
+--     allocate (liftIO $ h5d_get_space dataset) (liftIO . h5s_close) >>= \case
+--       (k, v) -> return $ Dataspace (Handle v k)
+--   sizeInBytes <- bufferSizeFor dtype dspace
+--   buffer <- liftIO $ MV.unsafeNew sizeInBytes
+--   let c_dataset = rawHandle dataset
+--       c_dtype = rawHandle dtype
+--       c_dspace = rawHandle dspace
+--   !_ <- liftIO $
+--     MV.unsafeWith buffer $ \bufferPtr ->
+--       checkError
+--         =<< [C.exp| herr_t { H5Dread($(hid_t c_dataset), $(hid_t c_dtype), $(hid_t c_dspace),
+--                                    $(hid_t c_dspace), H5P_DEFAULT,
+--                                    (void*)$(uint8_t* bufferPtr)) } |]
+--   value <- peekArrayView $ ArrayView dtype dspace buffer
+--   close dtype
+--   close dspace
+--   return value
 
-h5d_write :: forall m. (HasCallStack, MonadResource m) => Dataset -> ArrayView -> m ()
-h5d_write dataset (ArrayView object_dtype object_dspace buffer) = withFrozenCallStack $ do
-  dataset_dtype <- getDatatype dataset
-  checkDatatype object_dtype dataset_dtype
-  dataset_dspace <- getDataspace dataset
-  let c_dataset = rawHandle dataset
-      c_object_dtype = rawHandle object_dtype
-      c_object_dspace = rawHandle object_dspace
-      c_dataset_dspace = rawHandle dataset_dspace
-  !_ <- liftIO . MV.unsafeWith buffer $ \bufferPtr ->
-    checkError
-      =<< [C.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_object_dtype), $(hid_t c_object_dspace),
-                                    $(hid_t c_dataset_dspace), H5P_DEFAULT,
-                                    (const void*)$(const uint8_t* bufferPtr)) } |]
-  return ()
+-- h5d_write :: forall m. (HasCallStack, MonadResource m) => Dataset -> ArrayView -> m ()
+-- h5d_write dataset (ArrayView object_dtype object_dspace buffer) = withFrozenCallStack $ do
+--   dataset_dtype <- getDatatype dataset
+--   checkDatatype object_dtype dataset_dtype
+--   dataset_dspace <- getDataspace dataset
+--   let c_dataset = rawHandle dataset
+--       c_object_dtype = rawHandle object_dtype
+--       c_object_dspace = rawHandle object_dspace
+--       c_dataset_dspace = rawHandle dataset_dspace
+--   !_ <- liftIO . MV.unsafeWith buffer $ \bufferPtr ->
+--     checkError
+--       =<< [C.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_object_dtype), $(hid_t c_object_dspace),
+--                                     $(hid_t c_dataset_dspace), H5P_DEFAULT,
+--                                     (const void*)$(const uint8_t* bufferPtr)) } |]
+--   return ()
 
-instance (Storable a, KnownDatatype a) => KnownDataset [a] where
-  withArrayView xs = withArrayView (V.fromList xs)
-  peekArrayView view = V.toList <$> peekArrayView view
+-- instance (Storable a, KnownDatatype a) => KnownDataset [a] where
+--   withArrayView xs = withArrayView (V.fromList xs)
+--   peekArrayView view = V.toList <$> peekArrayView view
 
-instance (Storable a, KnownDatatype a) => KnownDataset (Vector a) where
-  withArrayView v = withArrayView $ TemporaryContiguousArray [V.length v] v
-  peekArrayView view =
-    peekArrayView view
-      >>= \case
-        (TemporaryContiguousArray [n] v) -> assert (V.length v == n) $ return v
-        (TemporaryContiguousArray shape _) ->
-          error $
-            "array has wrong shape: " <> show shape <> "; expected a one-dimensional array"
+-- instance (Storable a, KnownDatatype a) => KnownDataset (Vector a) where
+--   withArrayView v = withArrayView $ TemporaryContiguousArray [V.length v] v
+--   peekArrayView view =
+--     peekArrayView view
+--       >>= \case
+--         (TemporaryContiguousArray [n] v) -> assert (V.length v == n) $ return v
+--         (TemporaryContiguousArray shape _) ->
+--           error $
+--             "array has wrong shape: " <> show shape <> "; expected a one-dimensional array"
 
 data TemporaryContiguousArray a = TemporaryContiguousArray ![Int] !(Vector a)
   deriving stock (Eq, Show)
 
-instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryContiguousArray a) where
-  withArrayView (TemporaryContiguousArray shape v) action = do
-    when (any (< 0) shape) . error $
-      "invalid shape: " <> show shape
-    when (V.length v < product shape) . error $
-      "buffer is too short (" <> show (V.length v) <> " elements) for array of shape " <> show shape
-    dtype <- ofType @a
-    dspace <- simpleDataspace shape
-    buffer <- liftIO $ V.unsafeThaw v
-    r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
-    close dspace
-    close dtype
-    return r
-  peekArrayView (ArrayView dtype dspace buffer) = do
-    ofType @a >>= \object_dtype ->
-      checkDatatype object_dtype dtype >> close object_dtype
-    dims <- liftIO $ h5s_get_simple_extent_dims dspace
-    sizeInBytes <- bufferSizeFor dtype dspace
-    unless (sizeInBytes == MV.length buffer) . error $
-      "bug: buffer has wrong size: "
-        <> show (MV.length buffer)
-        <> " bytes; expected "
-        <> show sizeInBytes
-        <> " for array of shape "
-        <> show dims
-    v <- liftIO . V.unsafeFreeze $ MV.unsafeCast buffer
-    return $ TemporaryContiguousArray dims v
+-- instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryContiguousArray a) where
+--   withArrayView (TemporaryContiguousArray shape v) action = do
+--     when (any (< 0) shape) . error $
+--       "invalid shape: " <> show shape
+--     when (V.length v < product shape) . error $
+--       "buffer is too short (" <> show (V.length v) <> " elements) for array of shape " <> show shape
+--     dtype <- ofType @a
+--     dspace <- simpleDataspace shape
+--     buffer <- liftIO $ V.unsafeThaw v
+--     r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
+--     close dspace
+--     close dtype
+--     return r
+--   peekArrayView (ArrayView dtype dspace buffer) = do
+--     ofType @a >>= \object_dtype ->
+--       checkDatatype object_dtype dtype >> close object_dtype
+--     dims <- liftIO $ h5s_get_simple_extent_dims dspace
+--     sizeInBytes <- bufferSizeFor dtype dspace
+--     unless (sizeInBytes == MV.length buffer) . error $
+--       "bug: buffer has wrong size: "
+--         <> show (MV.length buffer)
+--         <> " bytes; expected "
+--         <> show sizeInBytes
+--         <> " for array of shape "
+--         <> show dims
+--     v <- liftIO . V.unsafeFreeze $ MV.unsafeCast buffer
+--     return $ TemporaryContiguousArray dims v
 
 data TemporaryStridedMatrix a = TemporaryStridedMatrix !(Int, Int) !Int !(Vector a)
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (NFData)
 
-instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryStridedMatrix a) where
-  withArrayView (TemporaryStridedMatrix (d₀, d₁) s₀ v) action = do
-    when (d₀ < 0 || d₁ < 0 || s₀ < 0) . error $
-      "negative dimension or stride: " <> show (d₀, d₁) <> " " <> show s₀
-    when (s₀ < d₁) . error $
-      "invalid stride along the first dimension: " <> show s₀
-    when (V.length v < d₀ * s₀) . error $
-      "buffer is too short ("
-        <> show (V.length v)
-        <> " elements) for the bounding array of shape "
-        <> show (d₀, s₀)
-    dtype <- ofType @a
-    dspace <- simpleDataspace [d₀, s₀]
-    liftIO $ h5s_select_hyperslab dspace [0, 0] [d₀, d₁] [1, 1]
-    buffer <- liftIO $ V.unsafeThaw v
-    r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
-    close dspace
-    close dtype
-    return r
-  peekArrayView view =
-    peekArrayView view >>= \case
-      (TemporaryContiguousArray [d₀, d₁] v) ->
-        assert (V.length v == d₀ * d₁) . return $
-          TemporaryStridedMatrix (d₀, d₁) d₁ v
-      (TemporaryContiguousArray shape _) ->
-        error $
-          "array has wrong shape: " <> show shape <> "; expected a matrix"
+type instance ElementOf (TemporaryStridedMatrix a) = a
+
+instance (Storable a, KnownDatatype a) => KnownDataset' (TemporaryStridedMatrix a) where
+  withArrayView' (TemporaryStridedMatrix (d₀, d₁) s₀ v) action =
+    action (ArrayView' (fst $ V.unsafeToForeignPtr0 v) [d₀, d₁] [s₀, 1])
+  fromArrayView' (ArrayView' fp [d₀, d₁] [s₀, 1]) =
+    pure $
+      TemporaryStridedMatrix (d₀, d₁) s₀ (V.unsafeFromForeignPtr0 fp (d₀ * s₀))
+  fromArrayView' (ArrayView' _ _ _) = error "failed to convert ArrayView' to TemporaryStridedMatrix; check your rank and strides"
+
+-- instance (Storable a, KnownDatatype a) => KnownDataset (TemporaryStridedMatrix a) where
+--   withArrayView (TemporaryStridedMatrix (d₀, d₁) s₀ v) action = do
+--     when (d₀ < 0 || d₁ < 0 || s₀ < 0) . error $
+--       "negative dimension or stride: " <> show (d₀, d₁) <> " " <> show s₀
+--     when (s₀ < d₁) . error $
+--       "invalid stride along the first dimension: " <> show s₀
+--     when (V.length v < d₀ * s₀) . error $
+--       "buffer is too short ("
+--         <> show (V.length v)
+--         <> " elements) for the bounding array of shape "
+--         <> show (d₀, s₀)
+--     dtype <- ofType @a
+--     dspace <- simpleDataspace [d₀, s₀]
+--     liftIO $ h5s_select_hyperslab dspace [0, 0] [d₀, d₁] [1, 1]
+--     buffer <- liftIO $ V.unsafeThaw v
+--     r <- action . ArrayView dtype dspace . MV.unsafeCast $ buffer
+--     close dspace
+--     close dtype
+--     return r
+--   peekArrayView view =
+--     peekArrayView view >>= \case
+--       (TemporaryContiguousArray [d₀, d₁] v) ->
+--         assert (V.length v == d₀ * d₁) . return $
+--           TemporaryStridedMatrix (d₀, d₁) d₁ v
+--       (TemporaryContiguousArray shape _) ->
+--         error $
+--           "array has wrong shape: " <> show shape <> "; expected a matrix"
 
 {-
 getMaxDims :: [Int] -> [Int] -> [Int]
@@ -1685,49 +1710,49 @@ h5a_get_space attr =
     acquire = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
     h = rawHandle attr
 
-h5a_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> m a
-h5a_read object name = do
-  attr <- h5a_open object name
-  dtype <- h5a_get_type attr
-  dspace <- h5a_get_space attr
-  buffer <- liftIO . MV.unsafeNew =<< bufferSizeFor dtype dspace
-  close dspace
-  let c_attr = rawHandle attr
-      c_dtype = rawHandle dtype
-  !_ <- liftIO $
-    MV.unsafeWith buffer $ \bufferPtr ->
-      checkError
-        =<< [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_dtype), (void*)$(uint8_t* bufferPtr)) } |]
-  value <- peekArrayView $ ArrayView dtype dspace buffer
-  close dtype
-  close attr
-  return value
+-- h5a_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> m a
+-- h5a_read object name = do
+--   attr <- h5a_open object name
+--   dtype <- h5a_get_type attr
+--   dspace <- h5a_get_space attr
+--   buffer <- liftIO . MV.unsafeNew =<< bufferSizeFor dtype dspace
+--   close dspace
+--   let c_attr = rawHandle attr
+--       c_dtype = rawHandle dtype
+--   !_ <- liftIO $
+--     MV.unsafeWith buffer $ \bufferPtr ->
+--       checkError
+--         =<< [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_dtype), (void*)$(uint8_t* bufferPtr)) } |]
+--   value <- peekArrayView $ ArrayView dtype dspace buffer
+--   close dtype
+--   close attr
+--   return value
 
-h5a_write :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> a -> m ()
-h5a_write object name value =
-  withArrayView value $ \(ArrayView object_dtype object_dspace buffer) -> do
-    alreadyExists <- liftIO $ h5a_exists object name
-    unless alreadyExists $
-      h5a_create object name object_dtype object_dspace >>= close
-    attr <- h5a_open object name
-    h5a_get_type attr >>= \attr_dtype ->
-      checkDatatype object_dtype attr_dtype >> close attr_dtype
-    h5a_get_space attr >>= \attr_dspace -> do
-      isSame <- h5s_extent_equal object_dspace attr_dspace
-      unless isSame $ do
-        object_dims <- liftIO $ h5s_get_simple_extent_dims object_dspace
-        attr_dims <- liftIO $ h5s_get_simple_extent_dims attr_dspace
-        error $ "dataspace extents do not match: " <> show object_dims <> " != " <> show attr_dims
-      close attr_dspace
-    let c_attr = rawHandle attr
-        c_object_dtype = rawHandle object_dtype
-    _ <- liftIO $
-      MV.unsafeWith buffer $ \bufferPtr ->
-        checkError
-          =<< [C.exp| herr_t { H5Awrite($(hid_t c_attr), $(hid_t c_object_dtype),
-                                        (void const*)$(uint8_t const* bufferPtr)) } |]
-    close attr
-    return ()
+-- h5a_write :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> a -> m ()
+-- h5a_write object name value =
+--   withArrayView value $ \(ArrayView object_dtype object_dspace buffer) -> do
+--     alreadyExists <- liftIO $ h5a_exists object name
+--     unless alreadyExists $
+--       h5a_create object name object_dtype object_dspace >>= close
+--     attr <- h5a_open object name
+--     h5a_get_type attr >>= \attr_dtype ->
+--       checkDatatype object_dtype attr_dtype >> close attr_dtype
+--     h5a_get_space attr >>= \attr_dspace -> do
+--       isSame <- h5s_extent_equal object_dspace attr_dspace
+--       unless isSame $ do
+--         object_dims <- liftIO $ h5s_get_simple_extent_dims object_dspace
+--         attr_dims <- liftIO $ h5s_get_simple_extent_dims attr_dspace
+--         error $ "dataspace extents do not match: " <> show object_dims <> " != " <> show attr_dims
+--       close attr_dspace
+--     let c_attr = rawHandle attr
+--         c_object_dtype = rawHandle object_dtype
+--     _ <- liftIO $
+--       MV.unsafeWith buffer $ \bufferPtr ->
+--         checkError
+--           =<< [C.exp| herr_t { H5Awrite($(hid_t c_attr), $(hid_t c_object_dtype),
+--                                         (void const*)$(uint8_t const* bufferPtr)) } |]
+--     close attr
+--     return ()
 
 h5a_exists :: HasCallStack => Hid -> Text -> IO Bool
 h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object), $bs-cstr:c_name) } |]

@@ -1,6 +1,6 @@
 cabal-version:       2.4
 name:                hdf5-hs
-version:             0.2.0.0
+version:             0.2.0.1
 synopsis:            High-level Haskell bindings to HDF5 library
 description:         High-level Haskell bindings to HDF5 library
 homepage:            https://github.com/twesterhout/hdf5-hs
@@ -14,7 +14,7 @@ build-type:          Custom
 extra-doc-files:     README.md
                      CHANGELOG.md
 tested-with:         GHC == 8.8.4
-                     GHC == 8.10.3
+                     GHC == 8.10.7
                      -- GHC == 8.6.5
 
 flag use-pkgconfig
@@ -129,14 +129,14 @@ library
 executable example00
   import:              common-options
   hs-source-dirs:      example
-  main-is:             example00.hs 
+  main-is:             example00.hs
   build-depends:       hdf5-hs
   buildable:           True
 
 executable example01
   import:              common-options
   hs-source-dirs:      example
-  main-is:             example01.hs 
+  main-is:             example01.hs
   build-depends:       hdf5-hs
                      , vector
                      , safe-exceptions
@@ -146,26 +146,22 @@ executable example01
 executable example02
   import:              common-options
   hs-source-dirs:      example
-  main-is:             example02.hs 
+  main-is:             example02.hs
   build-depends:       hdf5-hs
-                     , text
-  buildable:           True
+  buildable:           False
 
 executable example03
   import:              common-options
   hs-source-dirs:      example
-  main-is:             example03.hs 
+  main-is:             example03.hs
   build-depends:       hdf5-hs
-                     , text
   buildable:           True
 
 executable example04
   import:              common-options
   hs-source-dirs:      example
-  main-is:             example04.hs 
+  main-is:             example04.hs
   build-depends:       hdf5-hs
-                     , text
-                     , vector
   buildable:           True
 
 

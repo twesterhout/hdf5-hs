@@ -13,12 +13,12 @@ main =
     -- Create a dataset
     _ <-
       join $
-        H5.createDataset' file "/dset"
+        H5.createEmptyDataset file "/dset"
           <$> (H5.ofType @Int) -- choose data type
           <*> (H5.ofShape [4, 6]) -- choose shape
 
     -- Alternatively, if you're not a fan of combinators
     dspace <- H5.ofShape [4, 6]
     dtype <- H5.ofType @Int
-    _ <- H5.createDataset' file "/dset2" dtype dspace
+    _ <- H5.createEmptyDataset file "/dset2" dtype dspace
     return ()

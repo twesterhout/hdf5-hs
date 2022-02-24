@@ -10,14 +10,14 @@ module Data.HDF5.Types
     close,
     Dataspace (..),
     Attribute (..),
-    ArrayView (..),
+    -- ArrayView (..),
     ArrayView' (..),
     KnownDataset' (..),
-    ElementOf (..),
+    ElementOf,
     DatasetSlice (..),
     Hyperslab (..),
     KnownDatatype (..),
-    KnownDataset (..),
+    -- KnownDataset (..),
 
     -- * Low-level types
 
@@ -36,10 +36,10 @@ module Data.HDF5.Types
   )
 where
 
-import Control.Monad.ST (RealWorld)
+-- import Control.Monad.ST (RealWorld)
 import Control.Monad.Trans.Resource
 import Control.Monad.Trans.Resource.Internal (ReleaseKey (..))
-import Data.Vector.Storable (MVector, Vector)
+import Data.Vector.Storable (Vector)
 import Foreign.C.Types (CInt, CUInt)
 import Foreign.ForeignPtr (ForeignPtr)
 import Prelude hiding (Handle)
@@ -93,7 +93,7 @@ data Object (k :: ObjectType) where
   Dataset :: {-# UNPACK #-} !Handle -> Object 'DatasetTy
   Datatype :: {-# UNPACK #-} !Handle -> Object 'DatatypeTy
 
-deriving instance Typeable (Object k)
+deriving stock instance Typeable (Object k)
 
 instance NFData (Object k) where
   rnf (File h) = rnf h
@@ -165,7 +165,7 @@ data DatasetSlice = DatasetSlice !Dataset !Hyperslab
   deriving stock (Generic)
   deriving anyclass (NFData)
 
-data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
+-- data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 
 type family ElementOf a
 
@@ -180,6 +180,6 @@ class KnownDatatype (ElementOf a) => KnownDataset' a where
     ArrayView' (ElementOf a) ->
     m a
 
-class KnownDataset a where
-  withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
-  peekArrayView :: (HasCallStack, MonadResource m) => ArrayView -> m a
+-- class KnownDataset a where
+--   withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
+--   peekArrayView :: (HasCallStack, MonadResource m) => ArrayView -> m a
