@@ -93,7 +93,7 @@ library
                      , resourcet
                      , unliftio-core
                      , bytestring-to-vector
-                     , constraints
+                     -- , constraints
   mixins:              base hiding (Prelude)
                      , relude (Relude as Prelude)
   exposed-modules:     Data.HDF5.Types
@@ -139,8 +139,6 @@ executable example01
   main-is:             example01.hs
   build-depends:       hdf5-hs
                      , vector
-                     , safe-exceptions
-                     , resourcet
   buildable:           True
 
 executable example02

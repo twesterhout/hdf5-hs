@@ -55,7 +55,7 @@ module Data.HDF5
     Datatype,
     Dataspace,
     ofShape,
-    ofType,
+    -- ofType,
     Attribute,
     -- readAttribute,
     -- writeAttribute,
@@ -68,6 +68,7 @@ module Data.HDF5
     H5Exception (..),
     KnownDatatype (..),
     -- KnownDataset (..),
+    ElementOf,
     KnownDataset' (..),
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
@@ -82,7 +83,7 @@ import Control.Monad.IO.Unlift
 -- import Control.Monad.Trans.Resource
 
 import Data.Coerce
-import Data.Constraint
+-- import Data.Constraint
 import Data.HDF5.Types
 import Data.HDF5.Wrapper
 import Data.Some
@@ -91,7 +92,7 @@ import Data.Typeable (eqT, (:~:) (..))
 import System.Directory (doesFileExist)
 import qualified System.IO.Unsafe (unsafePerformIO)
 import UnliftIO.Resource
-import qualified Unsafe.Coerce
+-- import qualified Unsafe.Coerce
 import Prelude hiding (Handle, find, first, group, withFile)
 
 -- $setup
@@ -306,7 +307,7 @@ createDataset parent path object = do
       memDatatype <- ofType @(ElementOf a)
       memDataspace <- arrayViewDataspace view
       fileDataspace <- ofShape (dataspaceShape memDataspace)
-      trace (show (dataspaceShape fileDataspace)) $ pure ()
+      -- trace (show (dataspaceShape fileDataspace)) $ pure ()
       dataset <- createEmptyDataset parent path memDatatype fileDataspace
       -- These are purely an optimization
       close dataset

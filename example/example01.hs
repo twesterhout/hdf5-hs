@@ -1,11 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Control.Exception.Safe (assert)
-import Control.Monad.Trans.Resource
 import qualified Data.HDF5 as H5
-import Data.Vector.Storable (MVector (..), Vector)
-import qualified Data.Vector.Storable as V
-import qualified Data.Vector.Storable.Mutable as MV
+import Data.Vector.Storable (Vector)
 
 {- Reproduces "Read and write to a dataset" example from HDF5 documentation:
    <https://raw.githubusercontent.com/HDFGroup/hdf5/develop/examples/h5_rdwt.c>
