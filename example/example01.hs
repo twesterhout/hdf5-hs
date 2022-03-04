@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+import Data.ByteString (ByteString)
 import qualified Data.HDF5 as H5
 import Data.Vector.Storable (Vector)
 
@@ -22,6 +23,8 @@ main =
     -- Scalar datasets can be created via the Scalar newtype
     H5.createDataset file "/dset3" $ H5.Scalar (1.0 :: Double)
 
+    H5.createDataset file "/dset4" $ ("hello world" :: Text)
+
     -- Read from a dataset
     (xs :: [[Int]]) <- H5.open file "/dset1" >>= H5.readDataset
     print xs
@@ -36,6 +39,8 @@ main =
 
     -- Read scalar dataset
     H5.open file "/dset3" >>= H5.readDataset @(H5.Scalar Double) >>= (print . H5.unScalar)
+
+    H5.open file "/dset4" >>= H5.readDataset @Text >>= print
 
     -- Update an existing dataset
     H5.open file "/dset2" >>= H5.writeDataset [(10 :: Float) .. 15]

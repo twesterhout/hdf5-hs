@@ -139,6 +139,7 @@ executable example01
   main-is:             example01.hs
   build-depends:       hdf5-hs
                      , vector
+                     , bytestring
   buildable:           True
 
 executable example02

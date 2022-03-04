@@ -355,7 +355,7 @@ exists parent path
         False -> return False
 
 existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
-existsAttribute object name = liftIO $ h5a_exists (rawHandle object) name
+existsAttribute object name = liftIO . withFrozenCallStack $ h5a_exists (rawHandle object) name
 
 -- readAttribute ::
 --   (HasCallStack, KnownDataset a, MonadResource m) =>

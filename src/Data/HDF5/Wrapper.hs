@@ -4,7 +4,8 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.HDF5.Wrapper
-  ( disableDiagOutput,
+  ( version,
+    disableDiagOutput,
     runHDF5,
 
     -- * Files
@@ -78,10 +79,9 @@ module Data.HDF5.Wrapper
     datasetShape,
 
     -- * Attributes
-    h5a_open,
-    h5a_create,
-    -- h5a_read,
-    -- h5a_write,
+    createEmptyAttribute,
+    attributeDatatype,
+    attributeDataspace,
     h5a_exists,
     h5a_delete,
 
@@ -97,6 +97,8 @@ import Control.Exception.Safe
 
 import Control.Monad.IO.Unlift
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8
+import Data.ByteString.Internal (ByteString (..))
 import Data.Complex
 import Data.HDF5.Context
 import Data.HDF5.Types
@@ -108,8 +110,8 @@ import Data.Vector.Storable.Mutable (MVector (..))
 import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (CString)
 import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
-import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, newForeignPtr_, withForeignPtr)
-import Foreign.Marshal.Alloc (allocaBytes, free, mallocBytes)
+import Foreign.ForeignPtr (ForeignPtr, castForeignPtr, mallocForeignPtr, mallocForeignPtrBytes, newForeignPtr_, withForeignPtr)
+import Foreign.Marshal.Alloc (alloca, allocaBytes, free, mallocBytes)
 import Foreign.Marshal.Array (allocaArray, peekArray, pokeArray, withArrayLen)
 import Foreign.Marshal.Utils (toBool)
 import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullPtr, plusPtr)
@@ -126,6 +128,19 @@ import Prelude hiding (first, group)
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
 C.include "<hdf5.h>"
 C.include "<hdf5_hl.h>"
+
+version :: (Int, Int, Int)
+version = System.IO.Unsafe.unsafePerformIO $ do
+  alloca $ \aPtr ->
+    alloca $ \bPtr ->
+      alloca $ \cPtr -> do
+        !_ <-
+          checkError
+            =<< [CU.exp| herr_t { H5get_libversion($(unsigned* aPtr), $(unsigned* bPtr),
+                                                   $(unsigned* cPtr)) } |]
+        (,,) <$> (fromIntegral <$> peek aPtr)
+          <*> (fromIntegral <$> peek bPtr)
+          <*> (fromIntegral <$> peek cPtr)
 
 ----------------------------------------------------------------------------------------------------
 -- Error handling
@@ -642,7 +657,7 @@ instance KnownDatatype Text where ofType = getTextDatatype
 
 instance KnownDatatype String where ofType = getTextDatatype
 
-instance KnownDatatype ByteString where ofType = getTextDatatype
+instance KnownDatatype B.ByteString where ofType = getTextDatatype
 
 -- instance KnownDataset Int32 where
 --   withArrayView = withArrayViewStorable
@@ -1145,13 +1160,14 @@ getDataspace dataset = do
 
 getDatatype :: forall m. (HasCallStack, MonadResource m) => Dataset -> m Datatype
 getDatatype dataset = do
-  (k, v) <- allocate (liftIO $ h5d_get_type dataset) (liftIO . h5o_close)
+  (k, v) <-
+    allocate
+      (liftIO . withFrozenCallStack $ h5d_get_type (rawHandle dataset))
+      (liftIO . h5o_close)
   return $ Datatype (Handle v k)
 
-h5d_get_type :: HasCallStack => Dataset -> IO Hid
-h5d_get_type dataset = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } |]
-  where
-    h = rawHandle dataset
+h5d_get_type :: HasCallStack => Hid -> IO Hid
+h5d_get_type h = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } |]
 
 -- guessDataspace :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
 -- guessDataspace dspace = do
@@ -1209,6 +1225,7 @@ arrayViewHyperslab (ArrayView' _ shape strides)
     !rank = length strides
 
 boundingBox :: ArrayView' a -> [Int]
+boundingBox (ArrayView' _ _ []) = []
 boundingBox (ArrayView' _ shape strides)
   | null strides = []
   | shouldExpand strides = box
@@ -1405,6 +1422,59 @@ instance ListKnownDataset (ListDimension [t]) [t] => KnownDataset' [t] where
   fromArrayView' = listFromArrayView (Proxy :: Proxy (ListDimension [t]))
   withArrayView' = listWithArrayView (Proxy :: Proxy (ListDimension [t]))
 
+type instance ElementOf B.ByteString = B.ByteString
+
+type instance ElementOf Text = Text
+
+instance KnownDataset' B.ByteString where
+  fromArrayView' (ArrayView' fp [] []) = do
+    liftIO $
+      withForeignPtr fp $
+        (peek . castPtr) >=> B.packCString
+  fromArrayView' (ArrayView' _ shape _) = error $ "ArrayView has wrong shape: " <> show shape <> "; expected a rank-0 array"
+  withArrayView' (PS fp offset length) action = do
+    c_string <- liftIO $ mallocForeignPtr
+    liftIO $
+      withForeignPtr fp $ \(p :: Ptr Word8) ->
+        withForeignPtr c_string $ \c_string_ptr ->
+          poke c_string_ptr (castPtr (p `plusPtr` offset) :: Ptr CChar)
+    action (ArrayView' (castForeignPtr c_string) [] [])
+
+-- withArrayViewString :: (HasCallStack, MonadResource m) => ByteString -> (ArrayView -> m b) -> m b
+-- withArrayViewString x action = do
+--   dtype <- getTextDatatype
+--   dspace <- scalarDataspace
+--   buffer <- liftIO . V.unsafeThaw $ byteStringToVector x
+--   r <- action (ArrayView dtype dspace buffer)
+--   close dspace
+--   close dtype
+--   return r
+
+-- peekArrayViewString :: (HasCallStack, MonadResource m) => ArrayView -> m ByteString
+-- peekArrayViewString (ArrayView dtype dspace buffer) = do
+--   getTextDatatype >>= \object_dtype ->
+--     checkDatatype object_dtype dtype >> close object_dtype
+--   scalarDataspace >>= \object_dspace -> do
+--     isSame <- h5s_extent_equal object_dspace dspace
+--     unless isSame $ error "dataspace extents do not match; expected a scalar dataspace"
+--     close object_dspace
+--   liftIO $ vectorToByteString <$> V.unsafeFreeze buffer
+
+-- instance KnownDataset ByteString where
+--   withArrayView = withArrayViewString
+--   peekArrayView = peekArrayViewString
+
+unsafeCastArrayView :: ArrayView' a -> ArrayView' b
+unsafeCastArrayView (ArrayView' fp shape stride) = ArrayView' (castForeignPtr fp) shape stride
+
+instance KnownDataset' Text where
+  fromArrayView' = (pure . (decodeUtf8 :: ByteString -> Text)) <=< (fromArrayView' . unsafeCastArrayView)
+  withArrayView' x action = withArrayView' (encodeUtf8 x :: ByteString) (action . unsafeCastArrayView)
+
+-- instance KnownDataset Text where
+--   withArrayView x = withArrayViewString (encodeUtf8 x :: ByteString)
+--   peekArrayView = (return . decodeUtf8) <=< peekArrayViewString
+
 readDataset :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> m a
 readDataset dataset = readDatasetImpl dataset =<< getDataspace dataset
 
@@ -1412,12 +1482,32 @@ readSelected :: forall a m. (KnownDataset' a, MonadResource m) => DatasetSlice -
 readSelected selection@(DatasetSlice dataset _) =
   readDatasetImpl dataset =<< processSelection selection
 
+isVariableLengthString :: Datatype -> Bool
+isVariableLengthString dtype =
+  System.IO.Unsafe.unsafePerformIO $! runHDF5 $ (dtype ==) <$> ofType @Text
+{-# NOINLINE isVariableLengthString #-}
+
+-- H5T_class_t H5Tget_class(hid_t type_id)
+
 readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
 readDatasetImpl dataset dataspace = do
-  view <- allocateForDataspace @(ElementOf a) dataspace
+  view@(ArrayView' fp _ _) <- allocateForDataspace @(ElementOf a) dataspace
   readInplaceImpl view dataset dataspace
-  !array <- fromArrayView' view
-  pure array
+  !x <- fromArrayView' view
+  -- Free variable-length strings which H5Dread might have allocated
+  dtype <- getDatatype dataset
+  when (isVariableLengthString dtype) $
+    liftIO . withForeignPtr fp $ \p -> do
+      let type_id = rawHandle dtype
+          space_id = rawHandle dataspace
+          c_buf = castPtr p
+      !_ <-
+        checkError
+          =<< [CU.exp| herr_t { H5Dvlen_reclaim($(hid_t type_id), $(hid_t space_id),
+                                                H5P_DEFAULT, $(void* c_buf)) } |]
+      pure ()
+  close dtype
+  pure x
 
 readInplace :: (MonadResource m, KnownDataset' a) => a -> Dataset -> m ()
 readInplace x dataset = readSelectedInplace x (toSelection dataset)
@@ -1678,36 +1768,59 @@ h5a_open object name =
     c_name = encodeUtf8 name
     acquire = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-cstr:c_name, H5P_DEFAULT) } |]
 
-h5a_create :: (HasCallStack, MonadResource m) => Hid -> Text -> Datatype -> Dataspace -> m Attribute
-h5a_create object name dtype dspace = do
-  let c_name = encodeUtf8 name
-      c_dtype = rawHandle dtype
-      c_dspace = rawHandle dspace
-      acquire =
-        checkError
-          =<< [C.exp| hid_t {
-                H5Acreate($(hid_t object), $bs-cstr:c_name,
-                          $(hid_t c_dtype), $(hid_t c_dspace),
-                          H5P_DEFAULT, H5P_DEFAULT)
-              } |]
-  allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
+h5a_create :: HasCallStack => Hid -> Text -> Hid -> Hid -> IO Hid
+h5a_create object name dtype dspace =
+  checkError
+    =<< [C.exp| hid_t {
+          H5Acreate($(hid_t object), $bs-cstr:c_name,
+                    $(hid_t dtype), $(hid_t dspace),
+                    H5P_DEFAULT, H5P_DEFAULT)
+        } |]
+  where
+    c_name = encodeUtf8 name
+
+createEmptyAttribute ::
+  (HasCallStack, MonadResource m) =>
+  Object t ->
+  Text ->
+  Datatype ->
+  Dataspace ->
+  m Attribute
+createEmptyAttribute parent name dtype dspace =
+  allocate acquire (liftIO . h5a_close) >>= \case
     (k, v) -> return . Attribute $ Handle v k
-
-h5a_get_type :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
-h5a_get_type attr =
-  allocate (liftIO acquire) (liftIO . h5o_close) >>= \case
-    (k, v) -> return . Datatype $ Handle v k
   where
-    acquire = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
-    h = rawHandle attr
+    acquire =
+      liftIO . withFrozenCallStack $
+        h5a_create (rawHandle parent) name (rawHandle dtype) (rawHandle dspace)
 
-h5a_get_space :: (HasCallStack, MonadResource m) => Attribute -> m Dataspace
-h5a_get_space attr =
-  allocate (liftIO acquire) (liftIO . h5s_close) >>= \case
-    (k, v) -> return . Dataspace $ Handle v k
-  where
-    acquire = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
-    h = rawHandle attr
+attributeDatatype :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
+attributeDatatype attr =
+  allocate
+    (liftIO . withFrozenCallStack $ h5a_get_type (rawHandle attr))
+    (liftIO . h5o_close)
+    >>= \case
+      (k, v) -> return . Datatype $ Handle v k
+
+h5a_get_type :: HasCallStack => Hid -> IO Hid
+h5a_get_type h = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
+
+attributeDataspace :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
+attributeDataspace attr =
+  allocate
+    (liftIO . withFrozenCallStack $ h5a_get_space (rawHandle attr))
+    (liftIO . h5s_close)
+    >>= \case
+      (k, v) -> return . Datatype $ Handle v k
+
+h5a_get_space :: HasCallStack => Hid -> IO Hid
+h5a_get_space h = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
+
+-- h5a_read :: Hid -> Hid -> ArrayView' a -> IO ()
+-- h5a_read attr dtype (ArrayView' fp _ _) = do
+
+readAttribute :: (MonadResource m, KnownDataset' a) => Object t -> Text -> m a
+readAttribute = undefined
 
 -- h5a_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> m a
 -- h5a_read object name = do

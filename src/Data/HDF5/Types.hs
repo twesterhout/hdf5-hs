@@ -170,15 +170,8 @@ data DatasetSlice = DatasetSlice !Dataset !Hyperslab
 type family ElementOf a
 
 class KnownDatatype (ElementOf a) => KnownDataset' a where
-  withArrayView' ::
-    (HasCallStack, MonadResource m) =>
-    a ->
-    (ArrayView' (ElementOf a) -> m b) ->
-    m b
-  fromArrayView' ::
-    (HasCallStack, MonadResource m) =>
-    ArrayView' (ElementOf a) ->
-    m a
+  withArrayView' :: (HasCallStack, MonadResource m) => a -> (ArrayView' (ElementOf a) -> m b) -> m b
+  fromArrayView' :: (HasCallStack, MonadResource m) => ArrayView' (ElementOf a) -> m a
 
 -- class KnownDataset a where
 --   withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
