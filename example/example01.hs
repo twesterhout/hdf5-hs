@@ -19,17 +19,23 @@ main =
         [19 .. 24]
       ]
     H5.createDataset file "/dset2" $ [1.0 .. (6.0 :: Float)]
+    -- Scalar datasets can be created via the Scalar newtype
+    H5.createDataset file "/dset3" $ H5.Scalar (1.0 :: Double)
 
     -- Read from a dataset
     (xs :: [[Int]]) <- H5.open file "/dset1" >>= H5.readDataset
     print xs
 
-    H5.createDataset file "/dset2" $ [1.0 .. (6.0 :: Float)]
     -- Read part of a dataset
+    -- Along the zeroth dimension we select 3 consequtive (i.e. stride is 1) elements
+    -- starting at index 2
     H5.open file "/dset2"
       >>= (H5.sliceDataset 0 2 3 1 >>> H5.readSelected @(Vector Float))
       >>= print
     -- prints [3.0,4.0,5.0]
+
+    -- Read scalar dataset
+    H5.open file "/dset3" >>= H5.readDataset @(H5.Scalar Double) >>= (print . H5.unScalar)
 
     -- Update an existing dataset
     H5.open file "/dset2" >>= H5.writeDataset [(10 :: Float) .. 15]

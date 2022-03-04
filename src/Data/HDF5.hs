@@ -41,6 +41,7 @@ module Data.HDF5
     -- SelectionType (..),
     -- DatasetSlice (..),
     ArrayView' (..),
+    Scalar (..),
     readInplace,
     readSelectedInplace,
     readDataset,

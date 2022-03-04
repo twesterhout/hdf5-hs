@@ -34,19 +34,14 @@ module Data.HDF5.Wrapper
     h5i_get_type,
 
     -- * Datatypes
-    h5t_equal,
-    h5t_get_size,
-    h5hl_dtype_to_text,
+    datatypeEqual,
+    datatypeSize,
+    datatypeName,
     checkDatatype,
 
     -- * Dataspaces
-    h5s_close,
-    h5s_get_simple_extent_ndims,
-    h5s_get_simple_extent_dims,
-    h5s_select_hyperslab,
     simpleDataspace,
-    scalarDataspace,
-    guessDataspace,
+    dataspaceRank,
     dataspaceShape,
     toHyperslab,
     sliceHyperslab,
@@ -77,6 +72,7 @@ module Data.HDF5.Wrapper
     -- h5d_write,
     TemporaryContiguousArray (..),
     TemporaryStridedMatrix (..),
+    Scalar (..),
     getDataspace,
     datasetRank,
     datasetShape,
@@ -108,6 +104,7 @@ import qualified Data.List
 import Data.Vector.Storable (Vector, (!))
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.ByteString
+import Data.Vector.Storable.Mutable (MVector (..))
 import qualified Data.Vector.Storable.Mutable as MV
 import Foreign.C.String (CString)
 import Foreign.C.Types (CChar, CDouble, CFloat, CUInt)
@@ -727,30 +724,28 @@ instance KnownDatatype ByteString where ofType = getTextDatatype
 --   withArrayView x = withArrayViewString (encodeUtf8 x :: ByteString)
 --   peekArrayView = (return . decodeUtf8) <=< peekArrayViewString
 
-h5t_equal :: HasCallStack => Datatype -> Datatype -> IO Bool
-h5t_equal dtype1 dtype2 = fromHtri =<< [CU.exp| htri_t { H5Tequal($(hid_t h1), $(hid_t h2)) } |]
-  where
-    h1 = rawHandle dtype1
-    h2 = rawHandle dtype2
+h5t_equal :: HasCallStack => Hid -> Hid -> IO Bool
+h5t_equal a b = fromHtri =<< [CU.exp| htri_t { H5Tequal($(hid_t a), $(hid_t b)) } |]
 
 fromHtri :: HasCallStack => Htri -> IO Bool
 fromHtri x = (> 0) <$> checkError x
 
-datatypeEqual :: Datatype -> Datatype -> Bool
-datatypeEqual a b = System.IO.Unsafe.unsafePerformIO $ h5t_equal a b
+datatypeEqual :: HasCallStack => Datatype -> Datatype -> Bool
+datatypeEqual a b = System.IO.Unsafe.unsafePerformIO $ h5t_equal (rawHandle a) (rawHandle b)
 
-h5t_get_size :: Datatype -> IO Int
-h5t_get_size dtype =
+instance Eq Datatype where
+  (==) = datatypeEqual
+
+h5t_get_size :: Hid -> IO Int
+h5t_get_size h =
   fmap fromIntegral . checkError
     =<< [C.block| int64_t {
           hsize_t size = H5Tget_size($(hid_t h));
           return size == 0 ? (-1) : (int64_t)size;
         } |]
-  where
-    h = rawHandle dtype
 
 datatypeSize :: Datatype -> Int
-datatypeSize dtype = System.IO.Unsafe.unsafePerformIO (h5t_get_size dtype)
+datatypeSize dtype = System.IO.Unsafe.unsafePerformIO (h5t_get_size (rawHandle dtype))
 
 h5hl_dtype_to_text :: Datatype -> IO Text
 h5hl_dtype_to_text dtype = do
@@ -771,11 +766,8 @@ h5hl_dtype_to_text dtype = do
 datatypeName :: Datatype -> Text
 datatypeName dtype = System.IO.Unsafe.unsafePerformIO (h5hl_dtype_to_text dtype)
 
-instance Eq Datatype where
-  (==) a b = System.IO.Unsafe.unsafePerformIO $ h5t_equal a b
-
 instance GHC.Show.Show Datatype where
-  show x = toString . System.IO.Unsafe.unsafePerformIO $ h5hl_dtype_to_text x
+  show = toString . datatypeName
 
 checkDatatype ::
   (HasCallStack, MonadIO m) =>
@@ -786,14 +778,13 @@ checkDatatype ::
   -- | Error when types do not match
   m ()
 checkDatatype expected obtained =
-  liftIO $
-    h5t_equal expected obtained >>= \case
-      True -> return ()
-      False -> do
-        nameExpected <- h5hl_dtype_to_text expected
-        nameObtained <- h5hl_dtype_to_text obtained
-        error $
-          "data type mismatch: expected " <> nameExpected <> ", but found " <> nameObtained
+  case datatypeEqual expected obtained of
+    True -> pure ()
+    False ->
+      let nameExpected = datatypeName expected
+          nameObtained = datatypeName obtained
+       in error $
+            "data type mismatch: expected " <> nameExpected <> ", but found " <> nameObtained
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
@@ -810,17 +801,13 @@ createScalarDataspace :: IO Hid
 createScalarDataspace = checkError =<< [CU.exp| hid_t { H5Screate(H5S_SCALAR) } |]
 
 createSimpleDataspace :: [Int] -> IO Hid
+createSimpleDataspace [] = createScalarDataspace
 createSimpleDataspace sizes =
   withArrayLen (toUnsigned <$> sizes) $ \rank (c_sizes :: Ptr Hsize) ->
     let c_rank = fromIntegral rank
      in checkError
           =<< [CU.exp| hid_t { H5Screate_simple($(int c_rank), $(const hsize_t* c_sizes),
                                                 $(const hsize_t* c_sizes)) } |]
-
-scalarDataspace :: MonadResource m => m Dataspace
-scalarDataspace =
-  allocate (liftIO createScalarDataspace) (liftIO . h5s_close) >>= \case
-    (k, h) -> return $ Dataspace (Handle h k)
 
 simpleDataspace :: MonadResource m => [Int] -> m Dataspace
 simpleDataspace sizes =
@@ -835,38 +822,35 @@ h5s_extent_equal dspace1 dspace2 = do
     fromHtri
       =<< [CU.exp| htri_t { H5Sextent_equal($(hid_t c_dspace1), $(hid_t c_dspace2)) } |]
 
-h5s_get_simple_extent_ndims :: HasCallStack => Dataspace -> IO Int
-h5s_get_simple_extent_ndims dspace =
+h5s_get_simple_extent_ndims :: HasCallStack => Hid -> IO Int
+h5s_get_simple_extent_ndims h =
   fmap fromIntegral . checkError
     =<< [C.exp| int { H5Sget_simple_extent_ndims($(hid_t h)) } |]
-  where
-    h = rawHandle dspace
+
+h5s_get_simple_extent_dims :: HasCallStack => Hid -> IO [Int]
+h5s_get_simple_extent_dims h = do
+  ndim <- h5s_get_simple_extent_ndims h
+  allocaArray ndim $ \dimsPtr -> do
+    _ <-
+      checkError
+        =<< [C.exp| int { H5Sget_simple_extent_dims($(hid_t h), $(hsize_t* dimsPtr), NULL) } |]
+    fmap fromIntegral <$> peekArray ndim dimsPtr
 
 dataspaceRank :: HasCallStack => Dataspace -> Int
 dataspaceRank dataspace =
   withFrozenCallStack $
-    System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_ndims dataspace)
+    System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_ndims (rawHandle dataspace))
 
 dataspaceShape :: HasCallStack => Dataspace -> [Int]
 dataspaceShape dataspace = case dataspaceSelectionType dataspace of
   SelectedNone -> replicate (dataspaceRank dataspace) 0
   SelectedAll ->
     withFrozenCallStack $
-      System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_dims dataspace)
+      System.IO.Unsafe.unsafePerformIO (h5s_get_simple_extent_dims (rawHandle dataspace))
   _ ->
     if isRegularHyperslab dataspace
       then hyperslabShape . toHyperslab $ dataspace
       else error "cannot determine the size of not regularly-shaped selection"
-
-h5s_get_simple_extent_dims :: HasCallStack => Dataspace -> IO [Int]
-h5s_get_simple_extent_dims dspace = do
-  ndim <- h5s_get_simple_extent_ndims dspace
-  allocaArray ndim $ \dimsPtr -> do
-    let h = rawHandle dspace
-    _ <-
-      checkError
-        =<< [C.exp| int { H5Sget_simple_extent_dims($(hid_t h), $(hsize_t* dimsPtr), NULL) } |]
-    fmap fromIntegral <$> peekArray ndim dimsPtr
 
 data SelectionType = SelectedNone | SelectedPoints | SelectedHyperslabs | SelectedAll
   deriving (Read, Show, Eq)
@@ -882,9 +866,9 @@ dataspaceSelectionType dspace
     c_dspace = rawHandle dspace
     c_sel_type = [CU.pure| int { H5Sget_select_type($(hid_t c_dspace)) } |]
 
-h5s_select_hyperslab :: HasCallStack => Dataspace -> [Int] -> [Int] -> [Int] -> IO ()
-h5s_select_hyperslab dspace start size stride = do
-  rank <- h5s_get_simple_extent_ndims dspace
+h5s_select_hyperslab :: HasCallStack => Hid -> [Int] -> [Int] -> [Int] -> IO ()
+h5s_select_hyperslab h start size stride = do
+  rank <- h5s_get_simple_extent_ndims h
   withArrayLen (toUnsigned <$> start) $ \startRank (c_start :: Ptr Hsize) ->
     withArrayLen (toUnsigned <$> size) $ \sizeRank (c_size :: Ptr Hsize) ->
       withArrayLen (toUnsigned <$> stride) $ \strideRank (c_stride :: Ptr Hsize) -> do
@@ -894,7 +878,6 @@ h5s_select_hyperslab dspace start size stride = do
           "'size' has wrong rank: " <> show sizeRank <> "; expected " <> show rank
         unless (rank == strideRank) . error $
           "'stride' has wrong rank: " <> show strideRank <> "; expected " <> show rank
-        let h = rawHandle dspace
         _ <-
           checkError
             =<< [CU.exp| herr_t {
@@ -914,44 +897,41 @@ h5s_select_hyperslab dspace start size stride = do
             <> show stride
         return ()
 
-h5s_is_regular_hyperslab :: HasCallStack => Dataspace -> IO Bool
-h5s_is_regular_hyperslab dspace =
-  withFrozenCallStack $
-    fromHtri =<< [CU.exp| htri_t { H5Sis_regular_hyperslab($(hid_t h)) } |]
-  where
-    h = rawHandle dspace
+h5s_is_regular_hyperslab :: HasCallStack => Hid -> IO Bool
+h5s_is_regular_hyperslab h =
+  fromHtri =<< [CU.exp| htri_t { H5Sis_regular_hyperslab($(hid_t h)) } |]
 
 isRegularHyperslab :: HasCallStack => Dataspace -> Bool
 isRegularHyperslab dspace =
   withFrozenCallStack $
-    System.IO.Unsafe.unsafePerformIO (h5s_is_regular_hyperslab dspace)
+    System.IO.Unsafe.unsafePerformIO (h5s_is_regular_hyperslab (rawHandle dspace))
 
-compressHyperslabs :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
-compressHyperslabs dspace =
-  liftIO (h5s_is_regular_hyperslab dspace) >>= \case
-    True -> do
-      let c_dspace = rawHandle dspace
-          raw =
-            checkError
-              =<< [C.block| hid_t {
-                    hsize_t start[H5S_MAX_RANK];
-                    hsize_t stride[H5S_MAX_RANK];
-                    hsize_t count[H5S_MAX_RANK];
-                    hsize_t block[H5S_MAX_RANK];
-                    herr_t status =
-                      H5Sget_regular_hyperslab($(hid_t c_dspace), start, stride, count, block);
-                    if (status < 0) { return (hid_t)status; }
-                    int const rank = H5Sget_simple_extent_ndims($(hid_t c_dspace));
-                    if (rank < 0) { return (hid_t)rank; }
-                    hsize_t dims[H5S_MAX_RANK];
-                    for (int i = 0; i < rank; ++i) {
-                      dims[i] = count[i] * block[i];
-                    }
-                    return H5Screate_simple(rank, dims, dims);
-                  } |]
-      allocate (liftIO raw) (liftIO . h5s_close) >>= \case
-        (k, h) -> return $ Dataspace (Handle h k)
-    False -> error "only a single hyperslab can be compressed"
+-- compressHyperslabs :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
+-- compressHyperslabs dspace =
+--   case isRegularHyperslab dspace of
+--     True -> do
+--       let c_dspace = rawHandle dspace
+--           raw =
+--             checkError
+--               =<< [C.block| hid_t {
+--                     hsize_t start[H5S_MAX_RANK];
+--                     hsize_t stride[H5S_MAX_RANK];
+--                     hsize_t count[H5S_MAX_RANK];
+--                     hsize_t block[H5S_MAX_RANK];
+--                     herr_t status =
+--                       H5Sget_regular_hyperslab($(hid_t c_dspace), start, stride, count, block);
+--                     if (status < 0) { return (hid_t)status; }
+--                     int const rank = H5Sget_simple_extent_ndims($(hid_t c_dspace));
+--                     if (rank < 0) { return (hid_t)rank; }
+--                     hsize_t dims[H5S_MAX_RANK];
+--                     for (int i = 0; i < rank; ++i) {
+--                       dims[i] = count[i] * block[i];
+--                     }
+--                     return H5Screate_simple(rank, dims, dims);
+--                   } |]
+--       allocate (liftIO raw) (liftIO . h5s_close) >>= \case
+--         (k, h) -> return $ Dataspace (Handle h k)
+--     False -> error "only a single hyperslab can be compressed"
 
 toUnsigned :: (HasCallStack, Show a, Integral a, Integral b) => a -> b
 toUnsigned x
@@ -964,6 +944,32 @@ hyperslabRank = V.length . hyperslabStart
 hyperslabShape :: Hyperslab -> [Int]
 hyperslabShape h = V.toList $ V.zipWith (*) (hyperslabBlock h) (hyperslabCount h)
 
+h5s_get_regular_hyperslab :: HasCallStack => Hid -> IO Hyperslab
+h5s_get_regular_hyperslab h = do
+  rank <- h5s_get_simple_extent_ndims h
+  start <- MV.new rank
+  stride <- MV.new rank
+  count <- MV.new rank
+  block <- MV.new rank
+  !_ <- (checkError =<<) $
+    MV.unsafeWith start $ \startPtr ->
+      MV.unsafeWith stride $ \stridePtr ->
+        MV.unsafeWith count $ \countPtr ->
+          MV.unsafeWith block $ \blockPtr ->
+            [CU.exp| herr_t {
+              H5Sget_regular_hyperslab($(hid_t h), $(hsize_t* startPtr),
+                $(hsize_t* stridePtr), $(hsize_t* countPtr), $(hsize_t* blockPtr)) } |]
+  start' <- V.freeze start
+  stride' <- V.freeze stride
+  count' <- V.freeze count
+  block' <- V.freeze block
+  pure $
+    Hyperslab
+      (V.map fromIntegral start')
+      (V.map fromIntegral stride')
+      (V.map fromIntegral count')
+      (V.map fromIntegral block')
+
 toHyperslab :: HasCallStack => Dataspace -> Hyperslab
 toHyperslab dspace =
   case dataspaceSelectionType dspace of
@@ -971,41 +977,20 @@ toHyperslab dspace =
     SelectedPoints -> error "points selection cannot be represented as a hyperslab"
     SelectedAll ->
       let shape = dataspaceShape dspace
+          rank = dataspaceRank dspace
        in Hyperslab
             (V.replicate rank 0)
             (V.replicate rank 1)
             (fromList shape)
             (V.replicate rank 1)
-    SelectedHyperslabs -> System.IO.Unsafe.unsafePerformIO $ do
-      unless (isRegularHyperslab dspace) $
-        error "non-regular hyperslab cannot be converted to regular hyperslab"
-      start <- MV.new rank
-      stride <- MV.new rank
-      count <- MV.new rank
-      block <- MV.new rank
-      let c_dspace = rawHandle dspace
-      _ <- (checkError =<<) $
-        MV.unsafeWith start $ \startPtr ->
-          MV.unsafeWith stride $ \stridePtr ->
-            MV.unsafeWith count $ \countPtr ->
-              MV.unsafeWith block $ \blockPtr ->
-                [CU.exp| herr_t {
-                  H5Sget_regular_hyperslab($(hid_t c_dspace), $(hsize_t* startPtr),
-                    $(hsize_t* stridePtr), $(hsize_t* countPtr), $(hsize_t* blockPtr)) } |]
-      start' <- V.freeze start
-      stride' <- V.freeze stride
-      count' <- V.freeze count
-      block' <- V.freeze block
-      return $
-        Hyperslab
-          (V.map fromIntegral start')
-          (V.map fromIntegral stride')
-          (V.map fromIntegral count')
-          (V.map fromIntegral block')
-  where
-    rank = dataspaceRank dspace
+    SelectedHyperslabs
+      | isRegularHyperslab dspace ->
+        System.IO.Unsafe.unsafePerformIO $
+          withFrozenCallStack $
+            h5s_get_regular_hyperslab (rawHandle dspace)
+      | otherwise -> error "non-regular hyperslab cannot be converted to regular hyperslab"
 
-checkSliceArguments :: Hyperslab -> Int -> Int -> Int -> Int -> a -> a
+checkSliceArguments :: HasCallStack => Hyperslab -> Int -> Int -> Int -> Int -> a -> a
 checkSliceArguments hyperslab dim start count stride
   | dim < 0 || dim >= rank =
     error $ "invalid dim: " <> show dim <> "; dataspace is " <> show rank <> "-dimensional"
@@ -1022,20 +1007,21 @@ checkSliceArguments hyperslab dim start count stride
     extent = hyperslabCount hyperslab V.! dim
     shape = hyperslabCount hyperslab
 
-sliceHyperslab :: Int -> Int -> Int -> Int -> Hyperslab -> Hyperslab
+sliceHyperslab :: HasCallStack => Int -> Int -> Int -> Int -> Hyperslab -> Hyperslab
 sliceHyperslab dim start count stride hyperslab@(Hyperslab startV strideV countV blockV) =
-  checkSliceArguments hyperslab dim start count stride $
-    let newStart = start + (startV ! dim)
-        newStride = (strideV ! dim) * stride
-        newCount
-          | count == -1 || start + count * stride > (countV ! dim) =
-            (countV ! dim - start) `div` stride
-          | otherwise = count
-     in Hyperslab
-          (startV V.// [(dim, newStart)])
-          (strideV V.// [(dim, newStride)])
-          (countV V.// [(dim, newCount)])
-          blockV
+  withFrozenCallStack $
+    checkSliceArguments hyperslab dim start count stride $
+      let newStart = start + (startV ! dim)
+          newStride = (strideV ! dim) * stride
+          newCount
+            | count == -1 || start + count * stride > (countV ! dim) =
+              (countV ! dim - start) `div` stride
+            | otherwise = count
+       in Hyperslab
+            (startV V.// [(dim, newStart)])
+            (strideV V.// [(dim, newStride)])
+            (countV V.// [(dim, newCount)])
+            blockV
 
 selectHyperslab :: (HasCallStack, MonadResource m) => Hyperslab -> Dataspace -> m Dataspace
 selectHyperslab hyperslab dspace = do
@@ -1167,27 +1153,24 @@ h5d_get_type dataset = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } 
   where
     h = rawHandle dataset
 
-guessDataspace :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
-guessDataspace dspace = do
-  let c_dspace = rawHandle dspace
-  c_sel_type <-
-    liftIO $
-      checkError =<< [C.exp| int { H5Sget_select_type($(hid_t c_dspace)) } |]
-  if c_sel_type == [CU.pure| int { H5S_SEL_ALL } |]
-    then return dspace
-    else
-      if c_sel_type == [CU.pure| int { H5S_SEL_HYPERSLABS } |]
-        then compressHyperslabs dspace
-        else
-          error $
-            "dataspace can be automatically constructed only from "
-              <> "H5S_SEL_ALL or H5S_SEL_HYPERSLABS selections"
+-- guessDataspace :: (HasCallStack, MonadResource m) => Dataspace -> m Dataspace
+-- guessDataspace dspace = do
+--   let c_dspace = rawHandle dspace
+--   c_sel_type <-
+--     liftIO $
+--       checkError =<< [C.exp| int { H5Sget_select_type($(hid_t c_dspace)) } |]
+--   if c_sel_type == [CU.pure| int { H5S_SEL_ALL } |]
+--     then return dspace
+--     else
+--       if c_sel_type == [CU.pure| int { H5S_SEL_HYPERSLABS } |]
+--         then compressHyperslabs dspace
+--         else
+--           error $
+--             "dataspace can be automatically constructed only from "
+--               <> "H5S_SEL_ALL or H5S_SEL_HYPERSLABS selections"
 
-bufferSizeFor :: MonadIO m => Datatype -> Dataspace -> m Int
-bufferSizeFor dtype dspace =
-  liftIO $
-    (*) <$> (product <$> h5s_get_simple_extent_dims dspace)
-      <*> (h5t_get_size dtype)
+-- bufferSizeFor :: Datatype -> Dataspace -> Int
+-- bufferSizeFor dtype dspace = product (dataspaceShape dspace) * datatypeSize dtype
 
 isValidArrayView :: ArrayView' a -> Bool
 isValidArrayView = const True
@@ -1198,7 +1181,7 @@ areStridesOkay strides = go strides
     go (x : y : ys) = if x `mod` y == 0 then go (y : ys) else False
     go _ = True
 
--- Convert row-major strides (i.e. in decreasing order) into strides understood by HDF5.
+-- | Convert row-major strides (i.e. in decreasing order) into strides understood by HDF5.
 prepareStrides :: [Int] -> [Int]
 prepareStrides = snd . foldr combine (1, [])
   where
@@ -1246,13 +1229,14 @@ boundingBox (ArrayView' _ shape strides)
 --         (hyperslabCount hyperslab)
 
 arrayViewDataspace :: (KnownDatatype a, MonadResource m) => ArrayView' a -> m Dataspace
+arrayViewDataspace view@(ArrayView' _ _ []) = simpleDataspace []
 arrayViewDataspace view@(ArrayView' _ _ strides)
-  | areStridesOkay strides = do
-    r <- selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
-    s1 <- dataspaceShape <$> simpleDataspace (boundingBox view)
-    let s2 = dataspaceShape r
-    trace (show (s1, s2, toHyperslab r)) $ pure ()
-    pure r
+  | areStridesOkay strides = selectHyperslab (arrayViewHyperslab view) =<< simpleDataspace (boundingBox view)
+  -- r <-
+  -- s1 <- dataspaceShape <$> simpleDataspace (boundingBox view)
+  -- let s2 = dataspaceShape r
+  -- trace (show (s1, s2, toHyperslab r)) $ pure ()
+  -- pure r
   | otherwise = error $ "unsupported strides: " <> show strides
 
 processSelection :: MonadResource m => DatasetSlice -> m Dataspace
@@ -1274,12 +1258,27 @@ allocateForDataspace dataspace = do
   dtype <- ofType @a
   let hyperslab = toHyperslab dataspace
       elementSize = datatypeSize dtype
-      shape = V.toList $ V.zipWith (*) (hyperslabCount hyperslab) (hyperslabBlock hyperslab)
+      shape = hyperslabShape hyperslab
       totalSize = elementSize * product shape
   ptr <- liftIO $ mallocForeignPtrBytes totalSize
   let !r = ArrayView' ptr shape (rowMajorStrides shape)
   close dtype
   pure r
+
+newtype Scalar a = Scalar {unScalar :: a}
+  deriving (Show, Eq)
+
+type instance ElementOf (Scalar a) = a
+
+instance (KnownDatatype a, Storable a) => KnownDataset' (Scalar a) where
+  fromArrayView' (ArrayView' fp [] []) = Scalar <$> liftIO (withForeignPtr fp peek)
+  fromArrayView' (ArrayView' _ shape _) = error $ "ArrayView has wrong shape: " <> show shape <> "; expected a rank-0 array"
+  withArrayView' (Scalar x) action = do
+    fp <- liftIO $ do
+      buffer@(MVector _ fp) <- MV.new 1
+      MV.write buffer 0 x
+      pure fp
+    action (ArrayView' fp [] [])
 
 instance KnownDatatype a => KnownDataset' (ArrayView' a) where
   fromArrayView' = pure
