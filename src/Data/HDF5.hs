@@ -58,14 +58,16 @@ module Data.HDF5
     ofShape,
     -- ofType,
     Attribute,
-    -- readAttribute,
-    -- writeAttribute,
+    readAttribute,
+    writeAttribute,
+    existsAttribute,
+    deleteAttribute,
+    attributeDatatype,
+    attributeDataspace,
     getName,
     exists,
-    existsAttribute,
     close,
     delete,
-    deleteAttribute,
     H5Exception (..),
     KnownDatatype (..),
     -- KnownDataset (..),
@@ -330,9 +332,6 @@ createDataset parent path object = do
 delete :: (HasCallStack, MonadIO m) => Group -> Text -> m ()
 delete parent name = liftIO $ h5l_delete (rawHandle parent) name
 
-deleteAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m ()
-deleteAttribute object name = liftIO $ h5a_delete (rawHandle object) name
-
 getRoot :: (HasCallStack, MonadResource m) => Object t -> m Group
 getRoot object =
   allocate (liftIO $ h5i_get_file_id (rawHandle object)) (liftIO . h5f_close) >>= \case
@@ -353,9 +352,6 @@ exists parent path
             H5I_GROUP -> existsHelper o rest
             _ -> return $ null rest
         False -> return False
-
-existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
-existsAttribute object name = liftIO . withFrozenCallStack $ h5a_exists (rawHandle object) name
 
 -- readAttribute ::
 --   (HasCallStack, KnownDataset a, MonadResource m) =>

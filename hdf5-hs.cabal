@@ -147,7 +147,7 @@ executable example02
   hs-source-dirs:      example
   main-is:             example02.hs
   build-depends:       hdf5-hs
-  buildable:           False
+  buildable:           True
 
 executable example03
   import:              common-options

@@ -79,11 +79,12 @@ module Data.HDF5.Wrapper
     datasetShape,
 
     -- * Attributes
-    createEmptyAttribute,
+    readAttribute,
+    writeAttribute,
+    existsAttribute,
+    deleteAttribute,
     attributeDatatype,
     attributeDataspace,
-    h5a_exists,
-    h5a_delete,
 
     -- * Helpers
     checkError,
@@ -1158,13 +1159,16 @@ getDataspace dataset = do
   (k, v) <- allocate (liftIO $ h5d_get_space dataset) (liftIO . h5s_close)
   return $ Dataspace (Handle v k)
 
-getDatatype :: forall m. (HasCallStack, MonadResource m) => Dataset -> m Datatype
+getDatatype :: (HasCallStack, MonadResource m) => Dataset -> m Datatype
 getDatatype dataset = do
   (k, v) <-
     allocate
       (liftIO . withFrozenCallStack $ h5d_get_type (rawHandle dataset))
       (liftIO . h5o_close)
   return $ Datatype (Handle v k)
+
+datasetDatatype :: (HasCallStack, MonadResource m) => Dataset -> m Datatype
+datasetDatatype = getDatatype
 
 h5d_get_type :: HasCallStack => Hid -> IO Hid
 h5d_get_type h = checkError =<< [C.exp| hid_t { H5Dget_type($(hid_t h)) } |]
@@ -1489,14 +1493,9 @@ isVariableLengthString dtype =
 
 -- H5T_class_t H5Tget_class(hid_t type_id)
 
-readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
-readDatasetImpl dataset dataspace = do
-  view@(ArrayView' fp _ _) <- allocateForDataspace @(ElementOf a) dataspace
-  readInplaceImpl view dataset dataspace
-  !x <- fromArrayView' view
-  -- Free variable-length strings which H5Dread might have allocated
-  dtype <- getDatatype dataset
-  when (isVariableLengthString dtype) $
+cleanupStringAllocations :: MonadResource m => Datatype -> Dataspace -> ArrayView' a -> m ()
+cleanupStringAllocations dtype dataspace (ArrayView' fp _ _)
+  | isVariableLengthString dtype =
     liftIO . withForeignPtr fp $ \p -> do
       let type_id = rawHandle dtype
           space_id = rawHandle dataspace
@@ -1504,8 +1503,18 @@ readDatasetImpl dataset dataspace = do
       !_ <-
         checkError
           =<< [CU.exp| herr_t { H5Dvlen_reclaim($(hid_t type_id), $(hid_t space_id),
-                                                H5P_DEFAULT, $(void* c_buf)) } |]
+                                                    H5P_DEFAULT, $(void* c_buf)) } |]
       pure ()
+  | otherwise = pure ()
+
+readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
+readDatasetImpl dataset dataspace = do
+  view@(ArrayView' fp _ _) <- allocateForDataspace @(ElementOf a) dataspace
+  readInplaceImpl view dataset dataspace
+  !x <- fromArrayView' view
+  -- Free variable-length strings which H5Dread might have allocated
+  dtype <- datasetDatatype dataset
+  cleanupStringAllocations dtype dataspace view
   close dtype
   pure x
 
@@ -1758,15 +1767,16 @@ getMaxDims dims strides
 ----------------------------------------------------------------------------------------------------
 -- {{{
 h5a_close :: HasCallStack => Hid -> IO ()
-h5a_close attr = void . checkError =<< [C.exp| herr_t { H5Aclose($(hid_t attr)) } |]
+h5a_close attr = void . checkError =<< [CU.exp| herr_t { H5Aclose($(hid_t attr)) } |]
 
-h5a_open :: (HasCallStack, MonadResource m) => Hid -> Text -> m Attribute
-h5a_open object name =
+openAttribute :: (HasCallStack, MonadResource m) => Object t -> Text -> m Attribute
+openAttribute object name =
   allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
     (k, v) -> return . Attribute $ Handle v k
   where
+    c_object = rawHandle object
     c_name = encodeUtf8 name
-    acquire = checkError =<< [C.exp| hid_t { H5Aopen($(hid_t object), $bs-cstr:c_name, H5P_DEFAULT) } |]
+    acquire = checkError =<< [CU.exp| hid_t { H5Aopen($(hid_t c_object), $bs-cstr:c_name, H5P_DEFAULT) } |]
 
 h5a_create :: HasCallStack => Hid -> Text -> Hid -> Hid -> IO Hid
 h5a_create object name dtype dspace =
@@ -1805,13 +1815,13 @@ attributeDatatype attr =
 h5a_get_type :: HasCallStack => Hid -> IO Hid
 h5a_get_type h = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
 
-attributeDataspace :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
+attributeDataspace :: (HasCallStack, MonadResource m) => Attribute -> m Dataspace
 attributeDataspace attr =
   allocate
     (liftIO . withFrozenCallStack $ h5a_get_space (rawHandle attr))
     (liftIO . h5s_close)
     >>= \case
-      (k, v) -> return . Datatype $ Handle v k
+      (k, v) -> return . Dataspace $ Handle v k
 
 h5a_get_space :: HasCallStack => Hid -> IO Hid
 h5a_get_space h = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
@@ -1819,8 +1829,78 @@ h5a_get_space h = checkError =<< [C.exp| hid_t { H5Aget_space($(hid_t h)) } |]
 -- h5a_read :: Hid -> Hid -> ArrayView' a -> IO ()
 -- h5a_read attr dtype (ArrayView' fp _ _) = do
 
-readAttribute :: (MonadResource m, KnownDataset' a) => Object t -> Text -> m a
-readAttribute = undefined
+readAttribute' :: forall a m. (MonadResource m, KnownDataset' a) => Attribute -> m a
+readAttribute' attr = do
+  dtype <- attributeDatatype attr
+  dspace <- attributeDataspace attr
+  memDatatype <- ofType @(ElementOf a)
+  view@(ArrayView' fp _ _) <- allocateForDataspace @(ElementOf a) dspace
+  unless (dtype == memDatatype) $
+    error $
+      "datatype mismatch: you are trying to read "
+        <> show memDatatype
+        <> " from an attribute containing "
+        <> show dtype
+  !_ <-
+    liftIO . withForeignPtr fp $ \ptr ->
+      let c_attr = rawHandle attr
+          c_dtype = rawHandle memDatatype
+          c_buf = castPtr ptr
+       in checkError
+            =<< [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_dtype), $(void* c_buf)) } |]
+  !x <- fromArrayView' view
+  cleanupStringAllocations dtype dspace view
+  close memDatatype
+  close dspace
+  close dtype
+  pure x
+
+readAttribute :: (KnownDataset' a, MonadResource m) => Object t -> Text -> m a
+readAttribute object name = do
+  attr <- openAttribute object name
+  !x <- readAttribute' attr
+  close attr
+  pure x
+
+writeAttribute :: forall a m t. (MonadResource m, KnownDataset' a) => Object t -> Text -> a -> m ()
+writeAttribute object name x = do
+  alreadyExists <- existsAttribute object name
+  when alreadyExists $ deleteAttribute object name
+  withArrayView' x $ \view@(ArrayView' fp _ _) -> do
+    dtype <- ofType @(ElementOf a)
+    dspace <- arrayViewDataspace view
+    attr <- createEmptyAttribute object name dtype dspace
+    !_ <- liftIO . withForeignPtr fp $ \ptr -> do
+      let c_attr = rawHandle attr
+          c_dtype = rawHandle dtype
+          c_buf = castPtr ptr
+       in checkError
+            =<< [CU.exp| herr_t { H5Awrite($(hid_t c_attr), $(hid_t c_dtype),
+                                           $(const void* c_buf)) } |]
+    close attr
+    close dspace
+    close dtype
+
+-- view@(ArrayView' fp _ _) <- allocateForDataspace @(ElementOf a) dspace
+-- unless (dtype == memDatatype) $
+--   error $
+--     "datatype mismatch: you are trying to read "
+--       <> show memDatatype
+--       <> " from an attribute containing "
+--       <> show dtype
+-- !_ <-
+--   liftIO . withForeignPtr fp $ \ptr ->
+--     let c_attr = rawHandle attr
+--         c_dtype = rawHandle memDatatype
+--         c_buf = castPtr ptr
+--      in checkError
+--           =<< [C.exp| herr_t { H5Aread($(hid_t c_attr), $(hid_t c_dtype), $(void* c_buf)) } |]
+-- !x <- fromArrayView' view
+-- cleanupStringAllocations dtype dspace view
+-- close memDatatype
+-- close dspace
+-- close dtype
+-- pure x
 
 -- h5a_read :: forall a m. (HasCallStack, KnownDataset a, MonadResource m) => Hid -> Text -> m a
 -- h5a_read object name = do
@@ -1871,9 +1951,15 @@ h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object)
   where
     c_name = encodeUtf8 name
 
+existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
+existsAttribute object name = liftIO . withFrozenCallStack $ h5a_exists (rawHandle object) name
+
 h5a_delete :: HasCallStack => Hid -> Text -> IO ()
 h5a_delete object name = void . checkError =<< [C.exp| herr_t { H5Adelete($(hid_t object), $bs-cstr:c_name) } |]
   where
     c_name = encodeUtf8 name
+
+deleteAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m ()
+deleteAttribute object name = liftIO $ h5a_delete (rawHandle object) name
 
 -- }}}
