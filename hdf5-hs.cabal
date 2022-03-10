@@ -91,6 +91,7 @@ library
                      , containers
                      , template-haskell
                      , resourcet
+                     , list-t
                      , unliftio-core
                      , bytestring-to-vector
                      -- , constraints
@@ -161,6 +162,9 @@ executable example04
   hs-source-dirs:      example
   main-is:             example04.hs
   build-depends:       hdf5-hs
+                     , text
+                     , list-t
+                     , some
   buildable:           True
 
 

@@ -17,8 +17,12 @@ module Data.HDF5
     withFile,
     withFile',
     AccessFlags (..),
-    Group,
+    type Data.HDF5.Types.Group,
+    pattern Data.HDF5.Group,
     createGroup,
+    groupSize,
+    mapGroupM,
+    forGroupM,
     -- openGroup,
     -- forceGroup,
     Dataset,
@@ -35,7 +39,7 @@ module Data.HDF5
     slice,
     sliceDataset,
     sliceWithHyperslab,
-    Hyperslab (..),
+    Hyperslab,
     open,
     openByIndex,
     -- SelectionType (..),
@@ -113,6 +117,7 @@ import Prelude hiding (Handle, find, first, group, withFile)
 --   Text ->
 --   IO ()
 -- dump args path = callProcess "h5dump" (toString <$> args <> [path])
+pattern Group <- (Data.HDF5.Types.Group _)
 
 -- | [bracket](https://wiki.haskell.org/Bracket_pattern) for HDF5 files.
 openFile ::
@@ -271,7 +276,7 @@ delete parent name = liftIO $ h5l_delete (rawHandle parent) name
 getRoot :: (HasCallStack, MonadResource m) => Object t -> m Group
 getRoot object =
   allocate (liftIO $ h5i_get_file_id (rawHandle object)) (liftIO . h5f_close) >>= \case
-    (k, v) -> pure $ Group (Handle v k)
+    (k, v) -> pure $ Data.HDF5.Types.Group (Handle v k)
 
 exists :: forall m. (HasCallStack, MonadResource m) => Group -> Text -> m Bool
 exists parent path

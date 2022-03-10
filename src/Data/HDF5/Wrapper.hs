@@ -28,6 +28,9 @@ module Data.HDF5.Wrapper
     h5g_get_num_objs,
     h5g_create,
     createGroup,
+    groupSize,
+    mapGroupM,
+    forGroupM,
 
     -- * Links
     h5l_iterate,
@@ -130,6 +133,8 @@ import GHC.Stack
 import GHC.TypeLits
 import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
+import ListT (ListT)
+import qualified ListT
 import qualified System.IO.Unsafe
 import UnliftIO.Resource
 import Prelude hiding (Handle, first, group)
@@ -458,6 +463,23 @@ h5g_get_num_objs h =
           herr_t status = H5Gget_info($(hid_t h), &group_info);
           return status < 0 ? (int64_t)status : (int64_t)group_info.nlinks;
         } |]
+
+groupSize :: (HasCallStack, MonadIO m) => Group -> m Int
+groupSize g = liftIO $ h5g_get_num_objs (rawHandle g)
+
+mapGroupM :: MonadResource m => (forall t. Object t -> m a) -> Group -> ListT m a
+mapGroupM action g = do
+  let f !i = do
+        n <- groupSize g
+        if i < n
+          then do
+            r <- foldSome action =<< openByIndex' g i
+            pure $ Just (r, i + 1)
+          else pure Nothing
+  ListT.unfoldM f 0
+
+forGroupM :: MonadResource m => Group -> (forall t. Object t -> m a) -> ListT m a
+forGroupM g action = mapGroupM action g
 
 -- | Create a new group.
 h5g_create ::
