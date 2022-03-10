@@ -16,13 +16,18 @@ module Data.HDF5.Wrapper
     h5f_get_filesize,
 
     -- * Objects
+    open,
+    openByIndex,
+    open',
+    openByIndex',
     h5o_close,
     h5o_open,
-    h5o_open_by_idx,
+    -- h5o_open_by_idx,
 
     -- * Groups
     h5g_get_num_objs,
     h5g_create,
+    createGroup,
 
     -- * Links
     h5l_iterate,
@@ -30,6 +35,7 @@ module Data.HDF5.Wrapper
     h5l_exists,
 
     -- * Identifiers
+    getName,
     h5i_get_name,
     h5i_get_file_id,
     h5i_get_type,
@@ -104,6 +110,8 @@ import Data.Complex
 import Data.HDF5.Context
 import Data.HDF5.Types
 import qualified Data.List
+import Data.Some
+import Data.Typeable (eqT, (:~:) (..))
 import Data.Vector.Storable (Vector, (!))
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.ByteString
@@ -124,7 +132,7 @@ import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
 import qualified System.IO.Unsafe
 import UnliftIO.Resource
-import Prelude hiding (first, group)
+import Prelude hiding (Handle, first, group)
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
 C.include "<hdf5.h>"
@@ -367,6 +375,70 @@ h5o_open_by_idx parent index
   where
     c_index = fromIntegral index
 
+openObjectRaw :: (HasCallStack, MonadIO m) => Handle -> m (Some Object)
+openObjectRaw h@(Handle raw _) = do
+  liftIO (h5i_get_type raw) >>= \case
+    H5I_FILE -> return . mkSome . File $ h
+    H5I_GROUP -> return . mkSome . Group $ h
+    H5I_DATASET -> return . mkSome . Dataset $ h
+    H5I_DATATYPE -> return . mkSome . Datatype $ h
+    t -> do
+      name <- liftIO $ h5i_get_name raw
+      error $ show name <> " is a " <> show t <> "; expected an Object"
+
+objectType :: Object t -> ObjectType
+objectType object = case object of
+  (File _) -> FileTy
+  (Group _) -> GroupTy
+  (Dataset _) -> DatasetTy
+  (Datatype _) -> DatatypeTy
+
+prettyObjectType :: ObjectType -> Text
+prettyObjectType tp = case tp of
+  FileTy -> "File"
+  GroupTy -> "Group"
+  DatasetTy -> "Dataset"
+  DatatypeTy -> "Datatype"
+
+wrongObjectType :: HasCallStack => Object t1 -> proxy (Object t2) -> a
+wrongObjectType object _ =
+  error $
+    "wrong object type: "
+      <> show (getName object)
+      <> " is a "
+      <> prettyObjectType (objectType object)
+
+cast :: forall from to. (HasCallStack, Typeable from, Typeable to) => Object from -> Object to
+cast x = case (eqT :: Maybe (Object to :~: Object from)) of
+  Just Refl -> coerce x
+  Nothing -> withFrozenCallStack $ wrongObjectType x (Proxy :: Proxy (Object to))
+
+cast' :: forall t. (HasCallStack, Typeable t) => Some Object -> Object t
+cast' = foldSome helper
+  where
+    helper :: Object k -> Object t
+    helper = \case
+      x@(File _) -> cast x
+      x@(Group _) -> cast x
+      x@(Dataset _) -> cast x
+      x@(Datatype _) -> cast x
+
+open' :: (HasCallStack, MonadResource m) => Group -> Text -> m (Some Object)
+open' parent path =
+  allocate (liftIO $ h5o_open (rawHandle parent) path) (liftIO . h5o_close) >>= \case
+    (k, v) -> openObjectRaw (Handle v k)
+
+openByIndex' :: (HasCallStack, MonadResource m) => Group -> Int -> m (Some Object)
+openByIndex' parent index =
+  allocate (liftIO $ h5o_open_by_idx (rawHandle parent) index) (liftIO . h5o_close) >>= \case
+    (k, v) -> openObjectRaw (Handle v k)
+
+open :: (HasCallStack, Typeable t, MonadResource m) => Group -> Text -> m (Object t)
+open parent path = open' parent path >>= return . withFrozenCallStack cast'
+
+openByIndex :: (HasCallStack, Typeable t, MonadResource m) => Group -> Int -> m (Object t)
+openByIndex parent index = openByIndex' parent index >>= return . withFrozenCallStack cast'
+
 -- }}}
 ----------------------------------------------------------------------------------------------------
 -- Groups
@@ -407,6 +479,11 @@ h5g_create parent path = do
   return ()
   where
     c_path = encodeUtf8 path
+
+createGroup :: (HasCallStack, MonadResource m) => Group -> Text -> m Group
+createGroup parent path = do
+  liftIO $ h5g_create (rawHandle parent) path
+  open parent path
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
@@ -523,6 +600,9 @@ h5i_get_type h = do
             const H5I_type_t t = H5Iget_type($(hid_t h));
             return t == H5I_BADID ? -1 : t;
           } |]
+
+getName :: HasCallStack => Object t -> Text
+getName object = System.IO.Unsafe.unsafePerformIO $ h5i_get_name (rawHandle object)
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
