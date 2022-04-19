@@ -112,6 +112,8 @@ library
     if os(linux)
       extra-lib-dirs:  /usr/lib/x86_64-linux-gnu/hdf5/serial
       include-dirs:    /usr/include/hdf5/serial
+      extra-libraries: sz
+                     , z
   if !(os(darwin) || os(osx))
     extra-libraries:   z
 

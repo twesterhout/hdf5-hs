@@ -33,7 +33,8 @@ module Data.HDF5.Wrapper
     forGroupM,
 
     -- * Links
-    h5l_iterate,
+
+    -- h5l_iterate,
     h5l_delete,
     h5l_exists,
 
@@ -512,32 +513,32 @@ createGroup parent path = do
 -- Links
 ----------------------------------------------------------------------------------------------------
 -- {{{
-type H5L_iterate_t = Hid -> Ptr CChar -> Ptr H5L_info_t -> Ptr () -> IO Herr
-
-foreign import ccall "wrapper"
-  mkH5L_iterate_t :: H5L_iterate_t -> IO (FunPtr H5L_iterate_t)
+-- type H5L_iterate_t = Hid -> Ptr CChar -> Ptr H5L_info_t -> Ptr () -> IO Herr
+--
+-- foreign import ccall "wrapper"
+--   mkH5L_iterate_t :: H5L_iterate_t -> IO (FunPtr H5L_iterate_t)
 
 -- | Iterate over immediate children of an object, think 'forM_' but for HDF5
 -- groups.
-h5l_iterate ::
-  HasCallStack =>
-  -- | parent file or group
-  Hid ->
-  -- | action to perform on every object
-  (Hid -> Text -> IO ()) ->
-  IO ()
-h5l_iterate group action = do
-  let helper h c_name _ _ = fromCString c_name >>= action h >> return 0
-  bracket (mkH5L_iterate_t helper) freeHaskellFunPtr $ \actionPtr ->
-    void . checkError
-      =<< [C.exp| herr_t {
-            H5Literate($(hid_t group),
-                       H5_INDEX_NAME,
-                       H5_ITER_INC,
-                       NULL,
-                       $(herr_t (* actionPtr)(hid_t, const char*, const H5L_info_t*, void*)),
-                       NULL)
-          } |]
+-- h5l_iterate ::
+--   HasCallStack =>
+--   -- | parent file or group
+--   Hid ->
+--   -- | action to perform on every object
+--   (Hid -> Text -> IO ()) ->
+--   IO ()
+-- h5l_iterate group action = do
+--   let helper h c_name _ _ = fromCString c_name >>= action h >> return 0
+--   bracket (mkH5L_iterate_t helper) freeHaskellFunPtr $ \actionPtr ->
+--     void . checkError
+--       =<< [C.exp| herr_t {
+--             H5Literate1($(hid_t group),
+--                         H5_INDEX_NAME,
+--                         H5_ITER_INC,
+--                         NULL,
+--                         $(herr_t (* actionPtr)(hid_t, const char*, const H5L_info_t*, void*)),
+--                         NULL)
+--           } |]
 
 -- | Delete a link.
 h5l_delete ::
