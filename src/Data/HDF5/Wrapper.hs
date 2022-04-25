@@ -1266,7 +1266,7 @@ getDatatype :: (HasCallStack, MonadResource m) => Dataset -> m Datatype
 getDatatype dataset = do
   (k, v) <-
     allocate
-      (liftIO . withFrozenCallStack $ h5d_get_type (rawHandle dataset))
+      (liftIO $ withFrozenCallStack $ h5d_get_type (rawHandle dataset))
       (liftIO . h5o_close)
   return $ Datatype (Handle v k)
 
@@ -1904,13 +1904,14 @@ createEmptyAttribute parent name dtype dspace =
     (k, v) -> return . Attribute $ Handle v k
   where
     acquire =
-      liftIO . withFrozenCallStack $
-        h5a_create (rawHandle parent) name (rawHandle dtype) (rawHandle dspace)
+      liftIO $
+        withFrozenCallStack $
+          h5a_create (rawHandle parent) name (rawHandle dtype) (rawHandle dspace)
 
 attributeDatatype :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
 attributeDatatype attr =
   allocate
-    (liftIO . withFrozenCallStack $ h5a_get_type (rawHandle attr))
+    (liftIO $ withFrozenCallStack $ h5a_get_type (rawHandle attr))
     (liftIO . h5o_close)
     >>= \case
       (k, v) -> return . Datatype $ Handle v k
@@ -1921,7 +1922,7 @@ h5a_get_type h = checkError =<< [C.exp| hid_t { H5Aget_type($(hid_t h)) } |]
 attributeDataspace :: (HasCallStack, MonadResource m) => Attribute -> m Dataspace
 attributeDataspace attr =
   allocate
-    (liftIO . withFrozenCallStack $ h5a_get_space (rawHandle attr))
+    (liftIO $ withFrozenCallStack $ h5a_get_space (rawHandle attr))
     (liftIO . h5s_close)
     >>= \case
       (k, v) -> return . Dataspace $ Handle v k
@@ -2055,7 +2056,7 @@ h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object)
     c_name = encodeUtf8 name
 
 existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
-existsAttribute object name = liftIO . withFrozenCallStack $ h5a_exists (rawHandle object) name
+existsAttribute object name = liftIO $ withFrozenCallStack $ h5a_exists (rawHandle object) name
 
 h5a_delete :: HasCallStack => Hid -> Text -> IO ()
 h5a_delete object name = void . checkError =<< [C.exp| herr_t { H5Adelete($(hid_t object), $bs-cstr:c_name) } |]
