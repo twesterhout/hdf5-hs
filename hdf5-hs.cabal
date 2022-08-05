@@ -22,6 +22,11 @@ flag use-pkgconfig
   manual: True
   default: False
 
+flag disable-default-paths
+  description: Disable standard paths where hdf5 lib may be found
+  manual: True
+  default: False
+
 source-repository head
   type:                git
   location:            https://github.com/twesterhout/hdf5-hs.git
@@ -109,7 +114,7 @@ library
   else
     extra-libraries:   hdf5_hl
                      , hdf5
-    if os(linux)
+    if os(linux) && !flag(disable-default-paths)
       extra-lib-dirs:  /usr/lib/x86_64-linux-gnu/hdf5/serial
       include-dirs:    /usr/include/hdf5/serial
   if !(os(darwin) || os(osx))
