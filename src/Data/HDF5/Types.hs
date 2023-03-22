@@ -1,39 +1,39 @@
-module Data.HDF5.Types
-  ( Object (..),
-    ObjectType (..),
-    File,
-    Group,
-    Dataset,
-    Datatype,
-    Handle (..),
-    rawHandle,
-    close,
-    Dataspace (..),
-    Attribute (..),
-    -- ArrayView (..),
-    ArrayView' (..),
-    KnownDataset' (..),
-    ElementOf,
-    DatasetSlice (..),
-    Hyperslab (..),
-    KnownDatatype (..),
-    -- KnownDataset (..),
+module Data.HDF5.Types (
+  Object (..),
+  ObjectType (..),
+  File,
+  Group,
+  Dataset,
+  Datatype,
+  Handle (..),
+  rawHandle,
+  close,
+  Dataspace (..),
+  Attribute (..),
+  -- ArrayView (..),
+  ArrayView' (..),
+  KnownDataset' (..),
+  ElementOf,
+  DatasetSlice (..),
+  Hyperslab (..),
+  KnownDatatype (..),
+  -- KnownDataset (..),
 
-    -- * Low-level types
+  -- * Low-level types
 
-    -- | See https://github.com/JuliaIO/HDF5.jl/blob/master/src/api_types.jl
-    Haddr,
-    Hbool,
-    Herr,
-    Hid,
-    Hsize,
-    Hssize,
-    Htri,
-    H5E_error2_t,
-    H5O_info1_t,
-    H5L_info_t,
-    H5I_type_t (..),
-  )
+  -- | See https://github.com/JuliaIO/HDF5.jl/blob/master/src/api_types.jl
+  Haddr,
+  Hbool,
+  Herr,
+  Hid,
+  Hsize,
+  Hssize,
+  Htri,
+  H5E_error2_t,
+  H5O_info1_t,
+  H5L_info_t,
+  H5I_type_t (..),
+)
 where
 
 -- import Control.Monad.ST (RealWorld)
@@ -41,7 +41,7 @@ import Control.Monad.Trans.Resource
 import Control.Monad.Trans.Resource.Internal (ReleaseKey (..))
 import Data.Vector.Storable (Vector)
 import Foreign.C.Types (CInt, CUInt)
-import Foreign.ForeignPtr (ForeignPtr)
+import GHC.ForeignPtr (ForeignPtr (..))
 import Prelude hiding (Handle)
 
 type Haddr = Word64
@@ -73,8 +73,9 @@ data H5I_type_t
   | H5I_ATTR
   deriving stock (Read, Show, Eq)
 
--- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
--- while keeping everything type-safe.
+{- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
+ while keeping everything type-safe.
+-}
 data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
   deriving stock (Read, Show, Eq, Typeable)
 
@@ -151,12 +152,16 @@ class KnownDatatype a where
   ofType :: MonadResource m => m Datatype
 
 data ArrayView' a = ArrayView' !(ForeignPtr a) ![Int] ![Int]
+  deriving stock (Generic)
+
+instance NFData (ArrayView' a) where
+  rnf (ArrayView' (ForeignPtr !_ !_) shape stride) = shape `deepseq` stride `deepseq` ()
 
 data Hyperslab = Hyperslab
-  { hyperslabStart :: !(Vector Int),
-    hyperslabStride :: !(Vector Int),
-    hyperslabCount :: !(Vector Int),
-    hyperslabBlock :: !(Vector Int)
+  { hyperslabStart :: !(Vector Int)
+  , hyperslabStride :: !(Vector Int)
+  , hyperslabCount :: !(Vector Int)
+  , hyperslabBlock :: !(Vector Int)
   }
   deriving stock (Read, Show, Eq, Generic)
   deriving anyclass (NFData)

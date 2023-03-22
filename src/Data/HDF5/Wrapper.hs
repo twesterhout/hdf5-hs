@@ -3,109 +3,106 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.HDF5.Wrapper
-  ( version,
-    disableDiagOutput,
-    runHDF5,
+module Data.HDF5.Wrapper (
+  version,
+  disableDiagOutput,
+  runHDF5,
 
-    -- * Files
-    h5f_open,
-    h5f_create,
-    h5f_close,
-    AccessFlags (..),
-    h5f_get_filesize,
+  -- * Files
+  openFile,
+  h5f_close,
+  AccessFlags (..),
+  -- h5f_get_filesize,
 
-    -- * Objects
-    open,
-    openByIndex,
-    open',
-    openByIndex',
-    h5o_close,
-    h5o_open,
-    -- h5o_open_by_idx,
+  -- * Objects
+  open,
+  openByIndex,
+  open',
+  openByIndex',
+  h5o_close,
+  h5o_open,
+  -- h5o_open_by_idx,
 
-    -- * Groups
-    h5g_get_num_objs,
-    h5g_create,
-    createGroup,
-    groupSize,
-    mapGroupM,
-    forGroupM,
+  -- * Groups
+  h5g_get_num_objs,
+  h5g_create,
+  createGroup,
+  groupSize,
+  mapGroupM,
+  forGroupM,
 
-    -- * Links
+  -- * Links
 
-    -- h5l_iterate,
-    h5l_delete,
-    h5l_exists,
+  -- h5l_iterate,
+  h5l_delete,
+  h5l_exists,
 
-    -- * Identifiers
-    getName,
-    h5i_get_name,
-    h5i_get_file_id,
-    h5i_get_type,
+  -- * Identifiers
+  getName,
+  h5i_get_name,
+  h5i_get_file_id,
+  h5i_get_type,
 
-    -- * Datatypes
-    datatypeEqual,
-    datatypeSize,
-    datatypeName,
-    checkDatatype,
+  -- * Datatypes
+  datatypeEqual,
+  datatypeSize,
+  datatypeName,
+  checkDatatype,
 
-    -- * Dataspaces
-    simpleDataspace,
-    dataspaceRank,
-    dataspaceShape,
-    toHyperslab,
-    sliceHyperslab,
-    selectHyperslab,
-    prepareStrides,
-    slice,
-    sliceWithHyperslab,
-    toSelection,
-    sliceDataset,
-    boundingBox,
-    readDataset,
-    readSelected,
-    readInplace,
-    readSelectedInplace,
-    writeDataset,
-    writeSelected,
-    createEmptyDataset,
-    arrayViewDataspace,
-    dataspaceSelectionType,
-    SelectionType (..),
+  -- * Dataspaces
+  simpleDataspace,
+  dataspaceRank,
+  dataspaceShape,
+  toHyperslab,
+  sliceHyperslab,
+  selectHyperslab,
+  prepareStrides,
+  slice,
+  sliceWithHyperslab,
+  toSelection,
+  sliceDataset,
+  boundingBox,
+  readDataset,
+  readSelected,
+  readInplace,
+  readSelectedInplace,
+  writeDataset,
+  writeSelected,
+  createEmptyDataset,
+  arrayViewDataspace,
+  dataspaceSelectionType,
+  SelectionType (..),
 
-    -- * Datasets
-    h5d_open,
-    h5d_create,
-    h5d_get_space,
-    h5d_get_type,
-    -- h5d_read,
-    -- h5d_write,
-    TemporaryContiguousArray (..),
-    TemporaryStridedMatrix (..),
-    Scalar (..),
-    getDataspace,
-    datasetRank,
-    datasetShape,
+  -- * Datasets
+  h5d_open,
+  h5d_create,
+  h5d_get_space,
+  h5d_get_type,
+  -- h5d_read,
+  -- h5d_write,
+  TemporaryContiguousArray (..),
+  TemporaryStridedMatrix (..),
+  Scalar (..),
+  getDataspace,
+  datasetRank,
+  datasetShape,
 
-    -- * Attributes
-    readAttribute,
-    writeAttribute,
-    existsAttribute,
-    deleteAttribute,
-    attributeDatatype,
-    attributeDataspace,
+  -- * Attributes
+  readAttribute,
+  writeAttribute,
+  existsAttribute,
+  deleteAttribute,
+  attributeDatatype,
+  attributeDataspace,
 
-    -- * Helpers
-    checkError,
-    fromHtri,
-    H5Exception (..),
-  )
+  -- * Helpers
+  checkError,
+  fromHtri,
+  H5Exception (..),
+)
 where
 
 import Control.Exception.Safe
--- import Control.Monad.Trans.Resource
-
 import Control.Monad.IO.Unlift
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8
@@ -136,6 +133,7 @@ import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
 import ListT (ListT)
 import qualified ListT
+import System.Directory (doesFileExist)
 import qualified System.IO.Unsafe
 import UnliftIO.Resource
 import Prelude hiding (Handle, first, group)
@@ -153,7 +151,8 @@ version = System.IO.Unsafe.unsafePerformIO $ do
           checkError
             =<< [CU.exp| herr_t { H5get_libversion($(unsigned* aPtr), $(unsigned* bPtr),
                                                    $(unsigned* cPtr)) } |]
-        (,,) <$> (fromIntegral <$> peek aPtr)
+        (,,)
+          <$> (fromIntegral <$> peek aPtr)
           <*> (fromIntegral <$> peek bPtr)
           <*> (fromIntegral <$> peek cPtr)
 
@@ -219,15 +218,15 @@ collectStack = uninterruptibleMask_ $
     bracket (mkWalk callback) freeHaskellFunPtr $ \fn -> do
       h5e_walk2 stackId fn
     readIORef listRef
-  where
-    h5e_get_current_stack :: HasCallStack => IO Hid
-    h5e_get_current_stack = checkError' <$> [CU.exp| hid_t { H5Eget_current_stack() } |]
-    h5e_close_stack :: HasCallStack => Hid -> IO ()
-    h5e_close_stack x = checkError' <$> [CU.exp| herr_t { H5Eclose_stack($(hid_t x)) } |]
-    h5e_walk2 :: HasCallStack => Hid -> FunPtr H5E_walk2_t -> IO ()
-    h5e_walk2 stack func =
-      fmap checkError' $
-        [C.exp| herr_t {
+ where
+  h5e_get_current_stack :: HasCallStack => IO Hid
+  h5e_get_current_stack = checkError' <$> [CU.exp| hid_t { H5Eget_current_stack() } |]
+  h5e_close_stack :: HasCallStack => Hid -> IO ()
+  h5e_close_stack x = checkError' <$> [CU.exp| herr_t { H5Eclose_stack($(hid_t x)) } |]
+  h5e_walk2 :: HasCallStack => Hid -> FunPtr H5E_walk2_t -> IO ()
+  h5e_walk2 stack func =
+    fmap checkError' $
+      [C.exp| herr_t {
           H5Ewalk2($(hid_t stack),
                    H5E_WALK_DOWNWARD,
                    $(herr_t (* func)(unsigned int, const H5E_error2_t*, void*)),
@@ -249,11 +248,11 @@ prettyH5Exception (H5Exception code stack msg) =
     <> stack'
     <> "\n"
     <> toText (prettyCallStack callStack)
-  where
-    msg' = maybe "" (": " <>) msg
-    stack' = case (intersperse "\n  " $ prettyErrorInfo <$> stack) of
-      xs@(_ : _) -> mconcat $ "\n  " : xs
-      [] -> ""
+ where
+  msg' = maybe "" (": " <>) msg
+  stack' = case (intersperse "\n  " $ prettyErrorInfo <$> stack) of
+    xs@(_ : _) -> mconcat $ "\n  " : xs
+    [] -> ""
 
 _fail :: (HasCallStack, Integral a) => Maybe Text -> a -> IO a
 _fail msg code = collectStack >>= \stack -> throw $ H5Exception (fromIntegral code) stack msg
@@ -266,8 +265,13 @@ _checkError msg !x
 -- checkErrorWithMsg :: Integral a => Text -> a -> IO a
 -- checkErrorWithMsg msg = _checkError (Just msg)
 
-checkError :: (HasCallStack, Integral a) => a -> IO a
-checkError = _checkError Nothing
+checkError :: (HasCallStack, Integral a, MonadIO m) => a -> m a
+checkError = liftIO . _checkError Nothing
+
+checkError_ :: (HasCallStack, Integral a, MonadIO m) => a -> m ()
+checkError_ x = do
+  !_ <- checkError x
+  pure ()
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
@@ -293,49 +297,56 @@ accessFlagsToUInt ReadOnly = [CU.pure| unsigned int { H5F_ACC_RDONLY } |]
 accessFlagsToUInt WriteTruncate = [CU.pure| unsigned int { H5F_ACC_TRUNC } |]
 accessFlagsToUInt WriteAppend = [CU.pure| unsigned int { H5F_ACC_RDWR } |]
 
--- | Open an existing HDF5 file.
-h5f_open :: HasCallStack => Text -> AccessFlags -> IO Hid
-h5f_open filename flags = do
-  let c_filename = encodeUtf8 filename
-      c_flags = accessFlagsToUInt flags
-  checkError
-    =<< [CU.exp| hid_t { H5Fopen($bs-cstr:c_filename, $(unsigned int c_flags),
-                                          H5P_DEFAULT) } |]
+createHandle :: MonadResource m => (Hid -> IO ()) -> IO Hid -> m Handle
+createHandle cleanup acquire =
+  allocate (acquire >>= checkError) cleanup >>= \case
+    (k, v) -> pure $ Handle v k
 
--- | Create a new HDF5 file.
-h5f_create :: HasCallStack => Text -> AccessFlags -> IO Hid
-h5f_create filename flags = do
-  let c_filename = encodeUtf8 filename
-      c_flags = case flags of
-        ReadOnly ->
-          error "cannot create a file with ReadOnly access mode, use WriteTruncate instead"
-        WriteAppend -> accessFlagsToUInt WriteTruncate
-        WriteTruncate -> accessFlagsToUInt WriteTruncate
-  checkError
-    =<< [CU.exp| hid_t { H5Fcreate($bs-cstr:c_filename, $(unsigned int c_flags),
-                                            H5P_DEFAULT, H5P_DEFAULT) } |]
+openFile ::
+  (HasCallStack, MonadResource m) =>
+  -- | filename
+  Text ->
+  -- | mode in which to open the file
+  AccessFlags ->
+  -- | file handle
+  m File
+openFile filename@(encodeUtf8 -> c_filename) flags@(accessFlagsToUInt -> c_flags) =
+  fmap File $
+    case flags of
+      ReadOnly -> open
+      WriteTruncate -> create
+      WriteAppend ->
+        liftIO (doesFileExist (toString filename)) >>= \case
+          True -> open
+          False -> create
+ where
+  open =
+    createHandle
+      h5f_close
+      [CU.exp| hid_t { H5Fopen($bs-cstr:c_filename, $(unsigned int c_flags), H5P_DEFAULT) } |]
+  create =
+    createHandle
+      h5f_close
+      [CU.exp| hid_t { H5Fcreate($bs-cstr:c_filename, $(unsigned int c_flags), H5P_DEFAULT, H5P_DEFAULT) } |]
 
--- | Close a file.
---
--- /Note:/ we need it because files cannot be closed using @H5Gclose@. See
--- <https://portal.hdfgroup.org/display/HDF5/H5O_CLOSE> for more info.
 h5f_close :: HasCallStack => Hid -> IO ()
-h5f_close file = void . checkError =<< [CU.exp| herr_t { H5Fclose($(hid_t file)) } |]
+h5f_close h = checkError_ =<< [CU.exp| herr_t { H5Fclose($(hid_t h)) } |]
 
--- | Get size of a file.
-h5f_get_filesize ::
-  HasCallStack =>
-  -- | File handle
-  Hid ->
-  -- | File size in bytes
-  IO Int
-h5f_get_filesize file =
-  fmap fromIntegral . checkError
-    =<< [CU.block| int64_t {
-          hsize_t size;
-          herr_t status = H5Fget_filesize($(hid_t file), &size);
-          return status < 0 ? (int64_t)status : (int64_t)size;
-        } |]
+{- | Get size of a file.
+ h5f_get_filesize ::
+   HasCallStack =>
+   -- | File handle
+   Hid ->
+   -- | File size in bytes
+   IO Int
+ h5f_get_filesize file =
+   fmap fromIntegral . checkError
+     =<< [CU.block| int64_t {
+           hsize_t size;
+           herr_t status = H5Fget_filesize($(hid_t file), &size);
+           return status < 0 ? (int64_t)status : (int64_t)size;
+         } |]
+-}
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
@@ -359,8 +370,8 @@ h5o_open ::
 h5o_open parent path =
   withFrozenCallStack $
     checkError =<< [CU.exp| hid_t { H5Oopen($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
-  where
-    c_path = encodeUtf8 path
+ where
+  c_path = encodeUtf8 path
 
 -- | Open an object by index.
 h5o_open_by_idx ::
@@ -374,12 +385,12 @@ h5o_open_by_idx ::
 h5o_open_by_idx parent index
   | index < 0 = error $ "invalid index: " <> show index
   | otherwise =
-    withFrozenCallStack $
-      checkError
-        =<< [CU.exp| hid_t { H5Oopen_by_idx($(hid_t parent), ".", H5_INDEX_NAME,
+      withFrozenCallStack $
+        checkError
+          =<< [CU.exp| hid_t { H5Oopen_by_idx($(hid_t parent), ".", H5_INDEX_NAME,
                                             H5_ITER_INC, $(hsize_t c_index), H5P_DEFAULT) } |]
-  where
-    c_index = fromIntegral index
+ where
+  c_index = fromIntegral index
 
 openObjectRaw :: (HasCallStack, MonadIO m) => Handle -> m (Some Object)
 openObjectRaw h@(Handle raw _) = do
@@ -421,13 +432,13 @@ cast x = case (eqT :: Maybe (Object to :~: Object from)) of
 
 cast' :: forall t. (HasCallStack, Typeable t) => Some Object -> Object t
 cast' = foldSome helper
-  where
-    helper :: Object k -> Object t
-    helper = \case
-      x@(File _) -> cast x
-      x@(Group _) -> cast x
-      x@(Dataset _) -> cast x
-      x@(Datatype _) -> cast x
+ where
+  helper :: Object k -> Object t
+  helper = \case
+    x@(File _) -> cast x
+    x@(Group _) -> cast x
+    x@(Dataset _) -> cast x
+    x@(Datatype _) -> cast x
 
 open' :: (HasCallStack, MonadResource m) => Group -> Text -> m (Some Object)
 open' parent path =
@@ -500,8 +511,8 @@ h5g_create parent path = do
             return H5Gclose(g);
           } |]
   return ()
-  where
-    c_path = encodeUtf8 path
+ where
+  c_path = encodeUtf8 path
 
 createGroup :: (HasCallStack, MonadResource m) => Group -> Text -> m Group
 createGroup parent path = do
@@ -518,27 +529,28 @@ createGroup parent path = do
 -- foreign import ccall "wrapper"
 --   mkH5L_iterate_t :: H5L_iterate_t -> IO (FunPtr H5L_iterate_t)
 
--- | Iterate over immediate children of an object, think 'forM_' but for HDF5
--- groups.
--- h5l_iterate ::
---   HasCallStack =>
---   -- | parent file or group
---   Hid ->
---   -- | action to perform on every object
---   (Hid -> Text -> IO ()) ->
---   IO ()
--- h5l_iterate group action = do
---   let helper h c_name _ _ = fromCString c_name >>= action h >> return 0
---   bracket (mkH5L_iterate_t helper) freeHaskellFunPtr $ \actionPtr ->
---     void . checkError
---       =<< [C.exp| herr_t {
---             H5Literate1($(hid_t group),
---                         H5_INDEX_NAME,
---                         H5_ITER_INC,
---                         NULL,
---                         $(herr_t (* actionPtr)(hid_t, const char*, const H5L_info_t*, void*)),
---                         NULL)
---           } |]
+{- | Iterate over immediate children of an object, think 'forM_' but for HDF5
+ groups.
+ h5l_iterate ::
+   HasCallStack =>
+   -- | parent file or group
+   Hid ->
+   -- | action to perform on every object
+   (Hid -> Text -> IO ()) ->
+   IO ()
+ h5l_iterate group action = do
+   let helper h c_name _ _ = fromCString c_name >>= action h >> return 0
+   bracket (mkH5L_iterate_t helper) freeHaskellFunPtr $ \actionPtr ->
+     void . checkError
+       =<< [C.exp| herr_t {
+             H5Literate1($(hid_t group),
+                         H5_INDEX_NAME,
+                         H5_ITER_INC,
+                         NULL,
+                         $(herr_t (* actionPtr)(hid_t, const char*, const H5L_info_t*, void*)),
+                         NULL)
+           } |]
+-}
 
 -- | Delete a link.
 h5l_delete ::
@@ -553,8 +565,8 @@ h5l_delete parent path = do
     checkError
       =<< [CU.exp| herr_t { H5Ldelete($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
   return ()
-  where
-    c_path = encodeUtf8 path
+ where
+  c_path = encodeUtf8 path
 
 -- | Check whether a link exists
 h5l_exists ::
@@ -567,8 +579,8 @@ h5l_exists ::
 h5l_exists parent path =
   toBool
     <$> [CU.exp| htri_t { H5Lexists($(hid_t parent), $bs-cstr:c_path, H5P_DEFAULT) } |]
-  where
-    c_path = encodeUtf8 path
+ where
+  c_path = encodeUtf8 path
 
 -- }}}
 ----------------------------------------------------------------------------------------------------
@@ -581,12 +593,12 @@ h5i_get_name :: HasCallStack => Hid -> IO Text
 h5i_get_name h = do
   numBytes <- c_get_name h nullPtr 0
   allocaBytes (numBytes + 1) $ \s -> c_get_name h s (numBytes + 1) >> fromCString s
-  where
-    c_get_name :: Hid -> Ptr CChar -> Int -> IO Int
-    c_get_name x buffer size =
-      let c_size = fromIntegral size
-       in fmap fromIntegral . checkError
-            =<< [CU.exp| hssize_t { H5Iget_name($(hid_t x), $(char* buffer), $(size_t c_size)) } |]
+ where
+  c_get_name :: Hid -> Ptr CChar -> Int -> IO Int
+  c_get_name x buffer size =
+    let c_size = fromIntegral size
+     in fmap fromIntegral . checkError
+          =<< [CU.exp| hssize_t { H5Iget_name($(hid_t x), $(char* buffer), $(size_t c_size)) } |]
 
 -- | Get parent file.
 h5i_get_file_id ::
@@ -611,8 +623,8 @@ instance Enum H5I_type_t where
     | toBool [CU.pure| bool { $(int c_x) == H5I_DATASET } |] = H5I_DATASET
     | toBool [CU.pure| bool { $(int c_x) == H5I_ATTR } |] = H5I_ATTR
     | otherwise = error $ "invalid H5I_type_t: " <> show x
-    where
-      c_x = fromIntegral x
+   where
+    c_x = fromIntegral x
 
 -- | Get object type
 h5i_get_type :: Hid -> IO H5I_type_t
@@ -871,12 +883,12 @@ h5hl_dtype_to_text dtype = do
   let h = rawHandle dtype
   numBytes <- c_dtype_to_text h nullPtr 0
   allocaBytes (numBytes + 1) $ \s -> c_dtype_to_text h s (numBytes + 1) >> fromCString s
-  where
-    c_dtype_to_text :: Hid -> Ptr CChar -> Int -> IO Int
-    c_dtype_to_text x buffer size =
-      let c_size = toUnsigned size
-       in fmap fromIntegral . checkError
-            =<< [CU.block| hssize_t {
+ where
+  c_dtype_to_text :: Hid -> Ptr CChar -> Int -> IO Int
+  c_dtype_to_text x buffer size =
+    let c_size = toUnsigned size
+     in fmap fromIntegral . checkError
+          =<< [CU.block| hssize_t {
               size_t len = $(size_t c_size);
               herr_t status = H5LTdtype_to_text($(hid_t x), $(char* buffer), H5LT_DDL, &len);
               return (status < 0) ? status : (hssize_t)len;
@@ -981,9 +993,9 @@ dataspaceSelectionType dspace
   | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_HYPERSLABS } |] = SelectedHyperslabs
   | toBool [CU.pure| bool { $(int c_sel_type) == H5S_SEL_ALL } |] = SelectedAll
   | otherwise = error $ "invalid H5S_sel_type: " <> show c_sel_type
-  where
-    c_dspace = rawHandle dspace
-    c_sel_type = [CU.pure| int { H5Sget_select_type($(hid_t c_dspace)) } |]
+ where
+  c_dspace = rawHandle dspace
+  c_sel_type = [CU.pure| int { H5Sget_select_type($(hid_t c_dspace)) } |]
 
 h5s_select_hyperslab :: HasCallStack => Hid -> [Int] -> [Int] -> [Int] -> IO ()
 h5s_select_hyperslab h start size stride = do
@@ -1104,27 +1116,27 @@ toHyperslab dspace =
             (V.replicate rank 1)
     SelectedHyperslabs
       | isRegularHyperslab dspace ->
-        System.IO.Unsafe.unsafePerformIO $
-          withFrozenCallStack $
-            h5s_get_regular_hyperslab (rawHandle dspace)
+          System.IO.Unsafe.unsafePerformIO $
+            withFrozenCallStack $
+              h5s_get_regular_hyperslab (rawHandle dspace)
       | otherwise -> error "non-regular hyperslab cannot be converted to regular hyperslab"
 
 checkSliceArguments :: HasCallStack => Hyperslab -> Int -> Int -> Int -> Int -> a -> a
 checkSliceArguments hyperslab dim start count stride
   | dim < 0 || dim >= rank =
-    error $ "invalid dim: " <> show dim <> "; dataspace is " <> show rank <> "-dimensional"
+      error $ "invalid dim: " <> show dim <> "; dataspace is " <> show rank <> "-dimensional"
   | start < 0 || start >= extent =
-    error $
-      "invalid start: " <> show start <> "; dataspace shape is " <> show shape
+      error $
+        "invalid start: " <> show start <> "; dataspace shape is " <> show shape
   | stride < 1 = error $ "invalid stride: " <> show stride
   | count < 0 && count /= -1 = error $ "invalid count: " <> show count
   | V.any (/= 1) (hyperslabBlock hyperslab) =
-    error $ "only size-1 blocks are supported"
+      error $ "only size-1 blocks are supported"
   | otherwise = id
-  where
-    rank = hyperslabRank hyperslab
-    extent = hyperslabCount hyperslab V.! dim
-    shape = hyperslabCount hyperslab
+ where
+  rank = hyperslabRank hyperslab
+  extent = hyperslabCount hyperslab V.! dim
+  shape = hyperslabCount hyperslab
 
 sliceHyperslab :: HasCallStack => Int -> Int -> Int -> Int -> Hyperslab -> Hyperslab
 sliceHyperslab dim start count stride hyperslab@(Hyperslab startV strideV countV blockV) =
@@ -1134,7 +1146,7 @@ sliceHyperslab dim start count stride hyperslab@(Hyperslab startV strideV countV
           newStride = (strideV ! dim) * stride
           newCount
             | count == -1 || start + count * stride > (countV ! dim) =
-              (countV ! dim - start) `div` stride
+                (countV ! dim - start) `div` stride
             | otherwise = count
        in Hyperslab
             (startV V.// [(dim, newStart)])
@@ -1218,8 +1230,8 @@ h5d_open :: HasCallStack => Hid -> Text -> IO Hid
 h5d_open parent name =
   checkError
     =<< [C.exp| hid_t { H5Dopen($(hid_t parent), $bs-cstr:c_name, H5P_DEFAULT) } |]
-  where
-    c_name = encodeUtf8 name
+ where
+  c_name = encodeUtf8 name
 
 createEmptyDataset ::
   (HasCallStack, MonadResource m) =>
@@ -1247,15 +1259,15 @@ h5d_create parent name dtype dspace =
   checkError
     =<< [C.exp| hid_t { H5Dcreate($(hid_t parent), $bs-cstr:c_name, $(hid_t c_dtype),
                                   $(hid_t c_dspace), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT) } |]
-  where
-    c_name = encodeUtf8 name
-    c_dtype = rawHandle dtype
-    c_dspace = rawHandle dspace
+ where
+  c_name = encodeUtf8 name
+  c_dtype = rawHandle dtype
+  c_dspace = rawHandle dspace
 
 h5d_get_space :: HasCallStack => Dataset -> IO Hid
 h5d_get_space dataset = checkError =<< [C.exp| hid_t { H5Dget_space($(hid_t h)) } |]
-  where
-    h = rawHandle dataset
+ where
+  h = rawHandle dataset
 
 getDataspace :: forall m. (HasCallStack, MonadResource m) => Dataset -> m Dataspace
 getDataspace dataset = do
@@ -1300,15 +1312,15 @@ isValidArrayView = const True
 
 areStridesOkay :: [Int] -> Bool
 areStridesOkay strides = go strides
-  where
-    go (x : y : ys) = if x `mod` y == 0 then go (y : ys) else False
-    go _ = True
+ where
+  go (x : y : ys) = if x `mod` y == 0 then go (y : ys) else False
+  go _ = True
 
 -- | Convert row-major strides (i.e. in decreasing order) into strides understood by HDF5.
 prepareStrides :: [Int] -> [Int]
 prepareStrides = snd . foldr combine (1, [])
-  where
-    combine x (c, ys) = let !y = x `div` c in (x, y : ys)
+ where
+  combine x (c, ys) = let !y = x `div` c in (x, y : ys)
 
 shouldExpand :: [Int] -> Bool
 shouldExpand [] = False
@@ -1317,19 +1329,19 @@ shouldExpand strides = Data.List.last strides /= 1
 arrayViewHyperslab :: ArrayView' a -> Hyperslab
 arrayViewHyperslab (ArrayView' _ shape strides)
   | shouldExpand strides =
-    Hyperslab
-      (V.replicate (rank + 1) 0)
-      (V.replicate (rank + 1) 1)
-      (fromList (shape ++ [1]))
-      (V.replicate (rank + 1) 1)
+      Hyperslab
+        (V.replicate (rank + 1) 0)
+        (V.replicate (rank + 1) 1)
+        (fromList (shape ++ [1]))
+        (V.replicate (rank + 1) 1)
   | otherwise =
-    Hyperslab
-      (V.replicate rank 0)
-      (V.replicate rank 1)
-      (fromList shape)
-      (V.replicate rank 1)
-  where
-    !rank = length strides
+      Hyperslab
+        (V.replicate rank 0)
+        (V.replicate rank 1)
+        (fromList shape)
+        (V.replicate rank 1)
+ where
+  !rank = length strides
 
 boundingBox :: ArrayView' a -> [Int]
 boundingBox (ArrayView' _ _ []) = []
@@ -1337,9 +1349,9 @@ boundingBox (ArrayView' _ shape strides)
   | null strides = []
   | shouldExpand strides = box
   | otherwise = take rank box
-  where
-    rank = length strides
-    box = Data.List.head shape : prepareStrides strides
+ where
+  rank = length strides
+  box = Data.List.head shape : prepareStrides strides
 
 -- dataspaceFromHyperslab :: MonadResource m => Hyperslab -> m Dataspace
 -- dataspaceFromHyperslab hyperslab =
@@ -1413,11 +1425,11 @@ instance (KnownDatatype a, Storable a) => KnownDataset' (Vector a) where
   fromArrayView' (ArrayView' fp [size] [stride])
     | size <= 0 = pure V.empty
     | otherwise = liftIO $ do
-      buffer <- MV.new size
-      withForeignPtr fp $ \ptr ->
-        forM_ [0 .. size - 1] $ \i ->
-          MV.write buffer i =<< peekElemOff ptr (i * stride)
-      V.unsafeFreeze buffer
+        buffer <- MV.new size
+        withForeignPtr fp $ \ptr ->
+          forM_ [0 .. size - 1] $ \i ->
+            MV.write buffer i =<< peekElemOff ptr (i * stride)
+        V.unsafeFreeze buffer
   fromArrayView' (ArrayView' _ shape strides) =
     error $
       "expected a 1-dimensional array, but shape and strides were "
@@ -1426,8 +1438,8 @@ instance (KnownDatatype a, Storable a) => KnownDataset' (Vector a) where
         <> show strides
         <> " respectively"
   withArrayView' v action = action $ ArrayView' fp [n] [1]
-    where
-      (fp, n) = V.unsafeToForeignPtr0 v
+   where
+    (fp, n) = V.unsafeToForeignPtr0 v
 
 _listFromArrayView1D ::
   (HasCallStack, KnownDatatype a, Storable a, MonadResource m) =>
@@ -1450,15 +1462,15 @@ _listFromArrayView2D ::
 _listFromArrayView2D (ArrayView' fp [d₁, d₂] [s₁, s₂])
   | d₁ <= 0 = pure []
   | otherwise = liftIO . withForeignPtr fp $ \ptr -> loop₁ ptr (d₁ - 1) []
-  where
-    elemSize = let (_x :: a) = _x in sizeOf _x
-    loop₂ ptr 0 acc = do !e <- peekElemOff ptr 0; pure (e : acc)
-    loop₂ ptr j acc = do !e <- peekElemOff ptr (j * s₂); loop₂ ptr (j - 1) (e : acc)
-    readRow ptr i
-      | d₁ <= 0 = pure []
-      | otherwise = loop₂ (ptr `plusPtr` (i * s₁ * elemSize)) (d₂ - 1) []
-    loop₁ ptr 0 acc = do e <- readRow ptr 0; pure (e : acc)
-    loop₁ ptr i acc = do e <- readRow ptr i; loop₁ ptr (i - 1) (e : acc)
+ where
+  elemSize = let (_x :: a) = _x in sizeOf _x
+  loop₂ ptr 0 acc = do !e <- peekElemOff ptr 0; pure (e : acc)
+  loop₂ ptr j acc = do !e <- peekElemOff ptr (j * s₂); loop₂ ptr (j - 1) (e : acc)
+  readRow ptr i
+    | d₁ <= 0 = pure []
+    | otherwise = loop₂ (ptr `plusPtr` (i * s₁ * elemSize)) (d₂ - 1) []
+  loop₁ ptr 0 acc = do e <- readRow ptr 0; pure (e : acc)
+  loop₁ ptr i acc = do e <- readRow ptr i; loop₁ ptr (i - 1) (e : acc)
 _listFromArrayView2D (ArrayView' _ shape strides) =
   error $
     "expected a 2-dimensional array, but shape and strides were "
@@ -1475,21 +1487,22 @@ _listWithArrayView2D ::
   m b
 _listWithArrayView2D xs action
   | d₁ == 0 = do
-    fp <- liftIO $ newForeignPtr_ nullPtr
-    action (ArrayView' fp [0, 0] [1, 1])
+      fp <- liftIO $ newForeignPtr_ nullPtr
+      action (ArrayView' fp [0, 0] [1, 1])
   | d₂ == 0 = do
-    fp <- liftIO $ newForeignPtr_ nullPtr
-    action (ArrayView' fp [d₁, 0] [1, 1])
+      fp <- liftIO $ newForeignPtr_ nullPtr
+      action (ArrayView' fp [d₁, 0] [1, 1])
   | otherwise = do
-    unless (all ((== d₂) . length) (drop 1 xs)) $
-      error $ "nested list is not a matrix"
-    fp <- liftIO $ mallocForeignPtrBytes (d₁ * d₂ * elemSize)
-    liftIO . withForeignPtr fp $ \ptr -> pokeArray ptr (concat xs)
-    action (ArrayView' fp [d₁, d₂] [d₂, 1])
-  where
-    d₁ = length xs
-    d₂ = length (Data.List.head xs)
-    elemSize = let (_x :: a) = _x in sizeOf _x
+      unless (all ((== d₂) . length) (drop 1 xs)) $
+        error $
+          "nested list is not a matrix"
+      fp <- liftIO $ mallocForeignPtrBytes (d₁ * d₂ * elemSize)
+      liftIO . withForeignPtr fp $ \ptr -> pokeArray ptr (concat xs)
+      action (ArrayView' fp [d₁, d₂] [d₂, 1])
+ where
+  d₁ = length xs
+  d₂ = length (Data.List.head xs)
+  elemSize = let (_x :: a) = _x in sizeOf _x
 
 class (KnownNat d, KnownDatatype (ElementOf a)) => ListKnownDataset (d :: Nat) (a :: Type) where
   listFromArrayView :: MonadResource m => proxy d -> ArrayView' (ElementOf a) -> m a
@@ -1599,15 +1612,15 @@ isVariableLengthString dtype =
 cleanupStringAllocations :: MonadResource m => Datatype -> Dataspace -> ArrayView' a -> m ()
 cleanupStringAllocations dtype dataspace (ArrayView' fp _ _)
   | isVariableLengthString dtype =
-    liftIO . withForeignPtr fp $ \p -> do
-      let type_id = rawHandle dtype
-          space_id = rawHandle dataspace
-          c_buf = castPtr p
-      !_ <-
-        checkError
-          =<< [CU.exp| herr_t { H5Dvlen_reclaim($(hid_t type_id), $(hid_t space_id),
+      liftIO . withForeignPtr fp $ \p -> do
+        let type_id = rawHandle dtype
+            space_id = rawHandle dataspace
+            c_buf = castPtr p
+        !_ <-
+          checkError
+            =<< [CU.exp| herr_t { H5Dvlen_reclaim($(hid_t type_id), $(hid_t space_id),
                                                     H5P_DEFAULT, $(void* c_buf)) } |]
-      pure ()
+        pure ()
   | otherwise = pure ()
 
 readDatasetImpl :: forall a m. (KnownDataset' a, MonadResource m) => Dataset -> Dataspace -> m a
@@ -1876,10 +1889,10 @@ openAttribute :: (HasCallStack, MonadResource m) => Object t -> Text -> m Attrib
 openAttribute object name =
   allocate (liftIO acquire) (liftIO . h5a_close) >>= \case
     (k, v) -> return . Attribute $ Handle v k
-  where
-    c_object = rawHandle object
-    c_name = encodeUtf8 name
-    acquire = checkError =<< [CU.exp| hid_t { H5Aopen($(hid_t c_object), $bs-cstr:c_name, H5P_DEFAULT) } |]
+ where
+  c_object = rawHandle object
+  c_name = encodeUtf8 name
+  acquire = checkError =<< [CU.exp| hid_t { H5Aopen($(hid_t c_object), $bs-cstr:c_name, H5P_DEFAULT) } |]
 
 h5a_create :: HasCallStack => Hid -> Text -> Hid -> Hid -> IO Hid
 h5a_create object name dtype dspace =
@@ -1889,8 +1902,8 @@ h5a_create object name dtype dspace =
                     $(hid_t dtype), $(hid_t dspace),
                     H5P_DEFAULT, H5P_DEFAULT)
         } |]
-  where
-    c_name = encodeUtf8 name
+ where
+  c_name = encodeUtf8 name
 
 createEmptyAttribute ::
   (HasCallStack, MonadResource m) =>
@@ -1902,11 +1915,11 @@ createEmptyAttribute ::
 createEmptyAttribute parent name dtype dspace =
   allocate acquire (liftIO . h5a_close) >>= \case
     (k, v) -> return . Attribute $ Handle v k
-  where
-    acquire =
-      liftIO $
-        withFrozenCallStack $
-          h5a_create (rawHandle parent) name (rawHandle dtype) (rawHandle dspace)
+ where
+  acquire =
+    liftIO $
+      withFrozenCallStack $
+        h5a_create (rawHandle parent) name (rawHandle dtype) (rawHandle dspace)
 
 attributeDatatype :: (HasCallStack, MonadResource m) => Attribute -> m Datatype
 attributeDatatype attr =
@@ -2052,16 +2065,16 @@ writeAttribute object name x = do
 
 h5a_exists :: HasCallStack => Hid -> Text -> IO Bool
 h5a_exists object name = fromHtri =<< [C.exp| htri_t { H5Aexists($(hid_t object), $bs-cstr:c_name) } |]
-  where
-    c_name = encodeUtf8 name
+ where
+  c_name = encodeUtf8 name
 
 existsAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m Bool
 existsAttribute object name = liftIO $ withFrozenCallStack $ h5a_exists (rawHandle object) name
 
 h5a_delete :: HasCallStack => Hid -> Text -> IO ()
 h5a_delete object name = void . checkError =<< [C.exp| herr_t { H5Adelete($(hid_t object), $bs-cstr:c_name) } |]
-  where
-    c_name = encodeUtf8 name
+ where
+  c_name = encodeUtf8 name
 
 deleteAttribute :: (HasCallStack, MonadIO m) => Object t -> Text -> m ()
 deleteAttribute object name = liftIO $ h5a_delete (rawHandle object) name
