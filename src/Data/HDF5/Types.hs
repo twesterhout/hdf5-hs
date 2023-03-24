@@ -1,48 +1,56 @@
-module Data.HDF5.Types (
-  Object (..),
-  ObjectType (..),
-  File,
-  Group,
-  Dataset,
-  Datatype,
-  Handle (..),
-  rawHandle,
-  close,
-  Dataspace (..),
-  Attribute (..),
+module Data.HDF5.Types
+  ( HDF5 (..)
+  , runHDF5
+  , createHandle
+  , fromCString
+  , ObjectType (..)
+  , Handle (..)
+  , Scalar (..)
+  , Attribute (..)
   -- ArrayView (..),
-  ArrayView' (..),
-  KnownDataset' (..),
-  ElementOf,
-  DatasetSlice (..),
-  Hyperslab (..),
-  KnownDatatype (..),
+  , ArrayView (..)
+  , ElementOf
+  -- , DatasetSlice (..)
   -- KnownDataset (..),
 
-  -- * Low-level types
+    -- * Low-level types
 
-  -- | See https://github.com/JuliaIO/HDF5.jl/blob/master/src/api_types.jl
-  Haddr,
-  Hbool,
-  Herr,
-  Hid,
-  Hsize,
-  Hssize,
-  Htri,
-  H5E_error2_t,
-  H5O_info1_t,
-  H5L_info_t,
-  H5I_type_t (..),
-)
+    -- | See https://github.com/JuliaIO/HDF5.jl/blob/master/src/api_types.jl
+  , Haddr
+  , Hbool
+  , Herr
+  , Hid
+  , Hsize
+  , Hssize
+  , Htri
+  , H5E_error2_t
+  , H5O_info1_t
+  , H5L_info_t
+  , H5I_type_t (..)
+  , H5S_seloper_t (..)
+  )
 where
 
 -- import Control.Monad.ST (RealWorld)
+
+import Control.DeepSeq (NFData (..), deepseq)
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
 import Control.Monad.Trans.Resource
 import Control.Monad.Trans.Resource.Internal (ReleaseKey (..))
-import Data.Vector.Storable (Vector)
+import Data.ByteString qualified as BS
+import Data.Int
+import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8)
+import Data.Typeable
+import Data.Word
+import Foreign.C.String (CString)
 import Foreign.C.Types (CInt, CUInt)
+import Foreign.Ptr (Ptr)
 import GHC.ForeignPtr (ForeignPtr (..))
-import Prelude hiding (Handle)
+import GHC.Generics (Generic)
+import GHC.Records (HasField (..))
+import GHC.Stack
 
 type Haddr = Word64
 
@@ -73,111 +81,100 @@ data H5I_type_t
   | H5I_ATTR
   deriving stock (Read, Show, Eq)
 
-{- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
- while keeping everything type-safe.
--}
-data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
-  deriving stock (Read, Show, Eq, Typeable)
-
-data Handle = Handle {-# UNPACK #-} !Hid {-# UNPACK #-} !ReleaseKey
-
-instance NFData Handle where
-  rnf (Handle a (ReleaseKey b c)) =
-    case rnf a of
-      () -> case rnf b of
-        () -> rnf c
-
--- | A HDF5 object.
-data Object (k :: ObjectType) where
-  File :: {-# UNPACK #-} !Handle -> Object 'FileTy
-  Group :: {-# UNPACK #-} !Handle -> Object 'GroupTy
-  Dataset :: {-# UNPACK #-} !Handle -> Object 'DatasetTy
-  Datatype :: {-# UNPACK #-} !Handle -> Object 'DatatypeTy
-
-deriving stock instance Typeable (Object k)
-
-instance NFData (Object k) where
-  rnf (File h) = rnf h
-  rnf (Group h) = rnf h
-  rnf (Dataset h) = rnf h
-  rnf (Datatype h) = rnf h
-
-newtype Dataspace = Dataspace Handle
-
-newtype Attribute = Attribute Handle
-
-type File = Object 'FileTy
-
-type Group = Object 'GroupTy
-
-type Dataset = Object 'DatasetTy
-
-type Datatype = Object 'DatatypeTy
-
-class HasRawHandle a where
-  rawHandle :: a -> Hid
-
-instance HasRawHandle (Object t) where
-  rawHandle x = case x of
-    (File (Handle h _)) -> h
-    (Group (Handle h _)) -> h
-    (Dataset (Handle h _)) -> h
-    (Datatype (Handle h _)) -> h
-
-instance HasRawHandle Dataspace where
-  rawHandle (Dataspace (Handle h _)) = h
-
-instance HasRawHandle Attribute where
-  rawHandle (Attribute (Handle h _)) = h
-
-class CanClose a where
-  close :: MonadResource m => a -> m ()
-
-instance CanClose Dataspace where
-  close (Dataspace (Handle _ k)) = release k
-
-instance CanClose Attribute where
-  close (Attribute (Handle _ k)) = release k
-
-instance CanClose Group where
-  close (Group (Handle _ k)) = release k
-
-instance CanClose Dataset where
-  close (Dataset (Handle _ k)) = release k
-
-instance CanClose Datatype where
-  close (Datatype (Handle _ k)) = release k
-
-class KnownDatatype a where
-  ofType :: MonadResource m => m Datatype
-
-data ArrayView' a = ArrayView' !(ForeignPtr a) ![Int] ![Int]
-  deriving stock (Generic)
-
-instance NFData (ArrayView' a) where
-  rnf (ArrayView' (ForeignPtr !_ !_) shape stride) = shape `deepseq` stride `deepseq` ()
-
-data Hyperslab = Hyperslab
-  { hyperslabStart :: !(Vector Int)
-  , hyperslabStride :: !(Vector Int)
-  , hyperslabCount :: !(Vector Int)
-  , hyperslabBlock :: !(Vector Int)
-  }
+data H5S_seloper_t
+  = H5S_SELECT_SET
+  | H5S_SELECT_AND
+  | H5S_SELECT_OR
+  | H5S_SELECT_XOR
+  | H5S_SELECT_NOTB
+  | H5S_SELECT_NOTA
   deriving stock (Read, Show, Eq, Generic)
   deriving anyclass (NFData)
 
-data DatasetSlice = DatasetSlice !Dataset !Hyperslab
-  deriving stock (Generic)
+-- | A tag type for 'Object' GADT. Allows us to have polymorphic algorithms
+-- while keeping everything type-safe.
+data ObjectType = FileTy | GroupTy | DatasetTy | DatatypeTy
+  deriving stock (Read, Show, Eq, Generic, Typeable)
+
+data Handle s = Handle {-# UNPACK #-} !Hid {-# UNPACK #-} !ReleaseKey
+  deriving stock (Generic, Typeable)
+
+instance NFData (Handle s) where
+  rnf (Handle a (ReleaseKey b c)) = a `deepseq` b `deepseq` c `deepseq` ()
+
+newtype Scalar a = Scalar a
+  deriving stock (Read, Show, Eq, Generic)
   deriving anyclass (NFData)
+
+newtype Attribute s = Attribute (Handle s)
+
+instance HasField "rawHandle" (Attribute s) Hid where
+  getField (Attribute (Handle h _)) = h
+  {-# INLINE getField #-}
+
+-- class CanClose a where
+--   close :: MonadResource m => a -> m ()
+--
+-- instance CanClose Dataspace where
+--   close (Dataspace (Handle _ k)) = release k
+--
+-- instance CanClose Attribute where
+--   close (Attribute (Handle _ k)) = release k
+--
+-- instance CanClose Group where
+--   close (Group (Handle _ k)) = release k
+--
+-- instance CanClose Dataset where
+--   close (Dataset (Handle _ k)) = release k
+--
+-- instance CanClose Datatype where
+--   close (Datatype (Handle _ k)) = release k
+
+data ArrayView a
+  = ArrayView
+      !(ForeignPtr a)
+      -- ^ Data pointer
+      ![Int]
+      -- ^ Shape
+      ![Int]
+      -- ^ Strides
+  deriving stock (Generic)
+
+-- arrayViewFromPtrShape :: Ptr a -> [Int] -> (ArrayView a -> m b) -> m b
+-- arrayViewFromPtrShape = undefined
+
+-- arrayViewFromPtrShapeStrides :: Ptr a -> [Int] -> [Int] -> (ArrayView a -> m b) -> m b
+-- arrayViewFromPtrShapeStrides = undefined
+
+instance NFData (ArrayView a) where
+  rnf (ArrayView (ForeignPtr !_ !_) shape stride) = shape `deepseq` stride `deepseq` ()
+
+-- data DatasetSlice s = DatasetSlice !(Dataset s) !Hyperslab
+--   deriving stock (Generic)
+--   deriving anyclass (NFData)
 
 -- data ArrayView = ArrayView !Datatype !Dataspace (MVector RealWorld Word8)
 
 type family ElementOf a
 
-class KnownDatatype (ElementOf a) => KnownDataset' a where
-  withArrayView' :: (HasCallStack, MonadResource m) => a -> (ArrayView' (ElementOf a) -> m b) -> m b
-  fromArrayView' :: (HasCallStack, MonadResource m) => ArrayView' (ElementOf a) -> m a
+-- class KnownDatatype (ElementOf a) => KnownDataset a where
+--   withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView (ElementOf a) -> m b) -> m b
+--   fromArrayView :: (HasCallStack, MonadResource m) => ArrayView (ElementOf a) -> m a
 
 -- class KnownDataset a where
 --   withArrayView :: (HasCallStack, MonadResource m) => a -> (ArrayView -> m b) -> m b
 --   peekArrayView :: (HasCallStack, MonadResource m) => ArrayView -> m a
+
+newtype HDF5 s m a = HDF5 (ResourceT m a)
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, MonadTrans, MonadResource)
+
+runHDF5 :: MonadUnliftIO m => (forall s. HDF5 s m a) -> m a
+runHDF5 (HDF5 resource) = runResourceT resource
+
+createHandle :: MonadUnliftIO m => (Hid -> IO ()) -> IO Hid -> HDF5 s m (Handle s)
+createHandle cleanup acquire =
+  allocate acquire cleanup >>= \case
+    (k, v) -> pure $ Handle v k
+
+fromCString :: CString -> IO Text
+fromCString p = decodeUtf8 <$> BS.packCString p

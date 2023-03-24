@@ -30,39 +30,23 @@ source-repository head
   location: https://github.com/twesterhout/hdf5-hs.git
 
 common common-options
-  build-depends:
-    , base    >=4.12.0.0 && <5
-    , relude
-
-  mixins:
-    base hiding (Prelude),
-    relude (Relude as Prelude)
-
+  build-depends:      base >=4.16.0.0 && <5
   ghc-options:
-    -Wall -Wcompat -Widentities -Wincomplete-uni-patterns
+    -Wall -Wextra -Wcompat -Widentities -Wincomplete-uni-patterns
     -Wincomplete-record-updates -Wredundant-constraints
     -fhide-source-paths -Wmissing-export-lists -Wpartial-fields
+    -Wmissing-deriving-strategies -Wunused-packages
 
-  if impl(ghc >=8.8)
-    ghc-options: -Wmissing-deriving-strategies
-
-  if impl(ghc >=8.10)
-    ghc-options: -Wunused-packages
-
-  default-language:   Haskell2010
+  default-language:   GHC2021
   default-extensions:
     AllowAmbiguousTypes
-    BangPatterns
     ConstraintKinds
     DataKinds
     DefaultSignatures
     DeriveAnyClass
     DeriveGeneric
     DerivingStrategies
-    FlexibleContexts
-    FlexibleInstances
     FunctionalDependencies
-    GADTs
     GeneralizedNewtypeDeriving
     InstanceSigs
     KindSignatures
@@ -86,29 +70,32 @@ library
     , bytestring
     , bytestring-to-vector
     , containers
+    , deepseq
     , directory
     , inline-c
     , list-t
+    , mtl
     , resourcet
     , safe-exceptions
     , some
     , template-haskell
     , text
+    , transformers
+    , unliftio
     , unliftio-core
     , vector
 
-  -- , constraints
-  mixins:
-    base hiding (Prelude),
-    relude (Relude as Prelude)
-
-  exposed-modules:
-    Data.HDF5
+  exposed-modules: Data.HDF5
+  other-modules:
     Data.HDF5.Context
+    Data.HDF5.Dataset
+    Data.HDF5.Dataspace
+    Data.HDF5.Datatype
+    Data.HDF5.File
+    Data.HDF5.Group
+    Data.HDF5.Object
     Data.HDF5.Types
-    Data.HDF5.Wrapper
 
-  -- , Data.HDF5.Internal
   cc-options:      -Wall -Wextra
 
   if flag(use-pkgconfig)
@@ -124,8 +111,8 @@ library
       extra-lib-dirs: /usr/lib/x86_64-linux-gnu/hdf5/serial
       include-dirs:   /usr/include/hdf5/serial
 
-  if os(linux)
-    extra-libraries: z
+--   if os(linux)
+--     extra-libraries: z
 
 -- executable hdf5-hs
 --   import:              common-options
@@ -139,78 +126,89 @@ library
 --                        -with-rtsopts=-N
 --   buildable:           False
 
-executable example00
-  import:         common-options
-  hs-source-dirs: example
-  main-is:        example00.hs
-  build-depends:  hdf5-hs
-  buildable:      True
+-- executable example00
+--   import:         common-options
+--   hs-source-dirs: example
+--   main-is:        example00.hs
+--   build-depends:  hdf5-hs
+--   buildable:      True
 
-executable example01
-  import:         common-options
-  hs-source-dirs: example
-  main-is:        example01.hs
-  build-depends:
-    , bytestring
-    , hdf5-hs
-    , vector
+-- executable example01
+--   import:         common-options
+--   hs-source-dirs: example
+--   main-is:        example01.hs
+--   build-depends:
+--     , bytestring
+--     , hdf5-hs
+--     , vector
+-- 
+--   buildable:      True
 
-  buildable:      True
+-- executable example02
+--   import:         common-options
+--   hs-source-dirs: example
+--   main-is:        example02.hs
+--   build-depends:  hdf5-hs
+--   buildable:      True
 
-executable example02
-  import:         common-options
-  hs-source-dirs: example
-  main-is:        example02.hs
-  build-depends:  hdf5-hs
-  buildable:      True
+-- executable example03
+--   import:         common-options
+--   hs-source-dirs: example
+--   main-is:        example03.hs
+--   build-depends:  hdf5-hs
+--   buildable:      True
 
-executable example03
-  import:         common-options
-  hs-source-dirs: example
-  main-is:        example03.hs
-  build-depends:  hdf5-hs
-  buildable:      True
-
-executable example04
-  import:         common-options
-  hs-source-dirs: example
-  main-is:        example04.hs
-  build-depends:
-    , hdf5-hs
-    , list-t
-    , some
-    , text
-
-  buildable:      True
+-- executable example04
+--   import:         common-options
+--   hs-source-dirs: example
+--   main-is:        example04.hs
+--   build-depends:
+--     , hdf5-hs
+--     , list-t
+--     , some
+--     , text
+-- 
+--   buildable:      True
 
 test-suite hdf5-hs-test
   import:         common-options
   type:           exitcode-stdio-1.0
   hs-source-dirs: test
   main-is:        Spec.hs
+  other-modules:
+    Data.HDF5.DatasetSpec
+    Data.HDF5.DataspaceSpec
+    Data.HDF5.FileSpec
+    Data.HDF5.GroupSpec
+    Data.HDF5.TypesSpec
+    Utils
+
   build-depends:
     , directory
     , hdf5-hs
     , hspec
+    , QuickCheck
+    , resourcet
+    , some
+    , text
     , vector
 
   ghc-options:    -threaded -rtsopts -with-rtsopts=-N
-  buildable:      True
 
-test-suite doctests
-  import:         common-options
-  type:           exitcode-stdio-1.0
-  main-is:        doctests.hs
-  build-depends:
-    , doctest
-    , hdf5-hs
-
-  hs-source-dirs: test
-
-  -- We get some warnings from automatically generated files
-  ghc-options:    -Wno-missing-export-lists
-
-  if impl(ghc >=8.8)
-    ghc-options: -Wno-missing-deriving-strategies
-
-  buildable:      False
+-- test-suite doctests
+--   import:         common-options
+--   type:           exitcode-stdio-1.0
+--   main-is:        doctests.hs
+--   build-depends:
+--     , doctest
+--     , hdf5-hs
+-- 
+--   hs-source-dirs: test
+-- 
+--   -- We get some warnings from automatically generated files
+--   ghc-options:    -Wno-missing-export-lists
+-- 
+--   if impl(ghc >=8.8)
+--     ghc-options: -Wno-missing-deriving-strategies
+-- 
+--   buildable:      False
