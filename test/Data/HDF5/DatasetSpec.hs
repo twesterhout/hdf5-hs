@@ -2,9 +2,8 @@
 
 module Data.HDF5.DatasetSpec (spec) where
 
-import Control.Monad (unless, void)
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource
 import Data.HDF5
 import Data.Text (Text, pack, unpack)
 import Data.Text.Encoding (encodeUtf8)

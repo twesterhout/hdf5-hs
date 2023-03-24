@@ -2,13 +2,8 @@
 
 module Data.HDF5.DataspaceSpec (spec) where
 
-import Control.Monad (forM_, void)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource
+import Control.Monad (forM_)
 import Data.HDF5
-import Data.Some
-import Data.Text
-import System.Directory
 import Test.Hspec
 import Utils
 

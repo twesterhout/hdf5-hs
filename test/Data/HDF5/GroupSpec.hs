@@ -1,8 +1,6 @@
 module Data.HDF5.GroupSpec (spec) where
 
 import Control.Monad (void)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource
 import Data.HDF5
 import Data.Text
 import System.Directory

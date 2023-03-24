@@ -68,15 +68,11 @@ library
   hs-source-dirs:  src
   build-depends:
     , bytestring
-    , bytestring-to-vector
     , containers
     , deepseq
     , directory
     , inline-c
-    , list-t
-    , mtl
     , resourcet
-    , safe-exceptions
     , some
     , template-haskell
     , text
@@ -188,8 +184,6 @@ test-suite hdf5-hs-test
     , hdf5-hs
     , hspec
     , QuickCheck
-    , resourcet
-    , some
     , text
     , vector
 

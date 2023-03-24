@@ -44,12 +44,14 @@ module Data.HDF5
   , Hyperslab (..)
   , selectHyperslab
   , selectHyperslabWith
+  , Object (..)
   , runHDF5
   , H5S_seloper_t (..)
   , hyperslabBoundingBox
   , rowMajorStrides
   , colMajorStrides
   , MonadUnliftIO
+  , Some (..)
   )
 where
 
@@ -59,4 +61,6 @@ import Data.HDF5.Dataspace
 import Data.HDF5.Datatype
 import Data.HDF5.File
 import Data.HDF5.Group
+import Data.HDF5.Object
 import Data.HDF5.Types
+import Data.Some
