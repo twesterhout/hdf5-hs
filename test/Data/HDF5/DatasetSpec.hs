@@ -45,9 +45,11 @@ spec = do
   prop "writes/reads [Int]" $ \(ListVector @Int x) -> shouldRoundtrip x
   prop "writes/reads [[Int]]" $ \(ListMatrix @Int x) -> shouldRoundtrip x
   prop "writes/reads [[[Int]]]" $ \(ListTensor3D @Int x) -> shouldRoundtrip x
+  prop "writes/reads [[[[Int]]]]" $ \(ListTensor4D @Int x) -> shouldRoundtrip x
   prop "writes/reads [Double]" $ \(ListVector @Double x) -> shouldRoundtrip x
   prop "writes/reads [[Double]]" $ \(ListMatrix @Double x) -> shouldRoundtrip x
   prop "writes/reads [[[Double]]]" $ \(ListTensor3D @Double x) -> shouldRoundtrip x
+  prop "writes/reads [[[[Double]]]]" $ \(ListTensor4D @Double x) -> shouldRoundtrip x
 
   -- removeFile "scalar_write.h5"
   -- it "writes slices to datasets" $ do

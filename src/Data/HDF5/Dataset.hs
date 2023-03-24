@@ -130,6 +130,27 @@ instance (ElementOf [[[a]]] ~ a, KnownDatatype a, Storable a) => ListKnownDatase
             liftIO $ peekElemOff ptr0 (i0 * d1 * d2 + i1 * d2 + i2)
   listFromPtrShape _ _ = error "this should never happen"
 
+instance (ElementOf [[[[a]]]] ~ a, KnownDatatype a, Storable a) => ListKnownDataset 4 [[[[a]]]] where
+  listWithPtrShapeStride arr action = do
+    let d0 = length arr
+        d1 = if d0 == 0 then 0 else length (head arr)
+        d2 = if d1 == 0 then 0 else length (head (head arr))
+        d3 = if d2 == 0 then 0 else length (head (head (head arr)))
+        shape = [d0, d1, d2, d3]
+        flat = concat . concat . concat $ arr
+    withArrayLen flat $ \totalSize ptr -> do
+      unless (totalSize == product shape) $
+        error "list doesn't have a regular shape (i.e. rows have varying number of elements)"
+      action ptr shape (rowMajorStrides shape)
+  listFromPtrShape fp [d0, d1, d2, d3] =
+    withForeignPtr fp $ \ptr0 ->
+      forM [0 .. d0 - 1] $ \i0 ->
+        forM [0 .. d1 - 1] $ \i1 ->
+          forM [0 .. d2 - 1] $ \i2 ->
+            forM [0 .. d3 - 1] $ \i3 ->
+              liftIO $ peekElemOff ptr0 (i0 * d1 * d2 * d3 + i1 * d2 * d3 + i2 * d3 + i3)
+  listFromPtrShape _ _ = error "this should never happen"
+
 instance (ListKnownDataset (ListDimension [a]) [a]) => KnownDataset [a] where
   withPtrShapeStride = listWithPtrShapeStride @(ListDimension [a]) @[a]
 

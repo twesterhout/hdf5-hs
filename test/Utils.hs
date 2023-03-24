@@ -4,6 +4,7 @@ module Utils
   , ListVector (..)
   , ListMatrix (..)
   , ListTensor3D (..)
+  , ListTensor4D (..)
   )
 where
 
@@ -31,6 +32,9 @@ newtype ListMatrix a = ListMatrix [[a]]
 newtype ListTensor3D a = ListTensor3D [[[a]]]
   deriving stock (Show, Eq)
 
+newtype ListTensor4D a = ListTensor4D [[[[a]]]]
+  deriving stock (Show, Eq)
+
 instance Arbitrary a => Arbitrary (ListVector a) where
   arbitrary = ListVector <$> listOf arbitrary
 
@@ -42,7 +46,15 @@ instance Arbitrary a => Arbitrary (ListMatrix a) where
 
 instance Arbitrary a => Arbitrary (ListTensor3D a) where
   arbitrary = do
-    d0 <- chooseInt (0, 30)
-    d1 <- chooseInt (0, 30)
-    d2 <- chooseInt (0, 30)
+    d0 <- chooseInt (0, 20)
+    d1 <- chooseInt (0, 20)
+    d2 <- chooseInt (0, 20)
     ListTensor3D <$> vectorOf d0 (vectorOf d1 (vector d2))
+
+instance Arbitrary a => Arbitrary (ListTensor4D a) where
+  arbitrary = do
+    d0 <- chooseInt (0, 10)
+    d1 <- chooseInt (0, 10)
+    d2 <- chooseInt (0, 10)
+    d3 <- chooseInt (0, 10)
+    ListTensor4D <$> vectorOf d0 (vectorOf d1 (vectorOf d2 (vector d3)))
