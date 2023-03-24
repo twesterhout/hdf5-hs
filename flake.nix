@@ -77,6 +77,9 @@
               # zlib
               # gdb
             ];
+            shellHook = ''
+              export LD_LIBRARY_PATH=${pkgs.hdf5}/lib:$LD_LIBRARY_PATH
+            '';
           };
           formatter = pkgs.nixpkgs-fmt;
         };

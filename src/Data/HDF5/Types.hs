@@ -7,11 +7,8 @@ module Data.HDF5.Types
   , Handle (..)
   , Scalar (..)
   , Attribute (..)
-  -- ArrayView (..),
   , ArrayView (..)
   , ElementOf
-  -- , DatasetSlice (..)
-  -- KnownDataset (..),
 
     -- * Low-level types
 
@@ -31,8 +28,6 @@ module Data.HDF5.Types
   )
 where
 
--- import Control.Monad.ST (RealWorld)
-
 import Control.DeepSeq (NFData (..), deepseq)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
@@ -46,11 +41,9 @@ import Data.Typeable
 import Data.Word
 import Foreign.C.String (CString)
 import Foreign.C.Types (CInt, CUInt)
-import Foreign.Ptr (Ptr)
 import GHC.ForeignPtr (ForeignPtr (..))
 import GHC.Generics (Generic)
 import GHC.Records (HasField (..))
-import GHC.Stack
 
 type Haddr = Word64
 

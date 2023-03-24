@@ -11,7 +11,6 @@ module Data.HDF5.Group
   )
 where
 
-import Control.DeepSeq (NFData)
 import Control.Monad (void)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource
@@ -20,24 +19,19 @@ import Data.HDF5.File
 import Data.HDF5.Object
 import Data.HDF5.Types
 import Data.Some
-import Data.Text (Text, pack, unpack)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Data.Vector.Storable (Vector)
-import Data.Vector.Storable qualified as V
-import Data.Vector.Storable.Mutable qualified as MV
 import Foreign.C.Types
 import Foreign.Marshal hiding (void)
-import GHC.Generics (Generic)
 import GHC.Stack
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
-import System.Directory (doesFileExist)
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
 C.include "<hdf5.h>"
 
-createGroup :: (HasCallStack, MonadUnliftIO m) => Group s -> Text -> HDF5 s m (Group s)
+createGroup :: (MonadUnliftIO m) => Group s -> Text -> HDF5 s m (Group s)
 createGroup ((.rawHandle) -> parent) (encodeUtf8 -> path) = do
   Group
     <$> createHandle
@@ -46,7 +40,7 @@ createGroup ((.rawHandle) -> parent) (encodeUtf8 -> path) = do
         $(hid_t parent), $bs-cstr:path, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT) } |]
 
 -- | Close the object.
-h5o_close :: (HasCallStack, MonadIO m) => Hid -> m ()
+h5o_close :: (MonadIO m) => Hid -> m ()
 h5o_close h = liftIO . void $ [CU.exp| herr_t { H5Oclose($(hid_t h)) } |]
 
 open :: (HasCallStack, MonadUnliftIO m) => Group s -> Text -> HDF5 s m (Some (Object s))
@@ -64,7 +58,7 @@ objectFromHandle handle =
     t -> error $ "wrong handle type: " <> show t <> "; expected an Object"
 
 -- | Check whether a direct link exists.
-linkExists :: (HasCallStack, MonadUnliftIO m) => Group s -> Text -> HDF5 s m Bool
+linkExists :: (MonadUnliftIO m) => Group s -> Text -> HDF5 s m Bool
 linkExists ((.rawHandle) -> object) (encodeUtf8 -> path) =
   toBool <$> liftIO [CU.exp| htri_t { H5Lexists($(hid_t object), $bs-cstr:path, H5P_DEFAULT) } |]
 

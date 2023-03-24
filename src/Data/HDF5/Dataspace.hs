@@ -29,14 +29,8 @@ import Control.Monad.Trans.Resource
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.HDF5.Context
-import Data.HDF5.File
-import Data.HDF5.Group
-import Data.HDF5.Object
 import Data.HDF5.Types
 import Data.Some
-import Data.Text (Text, pack, unpack)
-import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
 import Data.Type.Equality
 import Data.Vector.Storable (Vector)
 import Data.Vector.Storable qualified as V
@@ -48,7 +42,6 @@ import GHC.Records (HasField (..))
 import GHC.Stack
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
-import System.Directory (doesFileExist)
 import UnliftIO.Foreign
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
@@ -62,7 +55,7 @@ instance HasField "rawHandle" (Dataspace s) Hid where
   getField (Dataspace (Handle h _)) = h
   {-# INLINE getField #-}
 
-createDataspace :: (HasCallStack, MonadUnliftIO m) => [Int] -> HDF5 s m (Dataspace s)
+createDataspace :: (MonadUnliftIO m) => [Int] -> HDF5 s m (Dataspace s)
 createDataspace [] = Dataspace <$> createHandle h5s_close [CU.exp| hid_t { H5Screate(H5S_SCALAR) } |]
 createDataspace shape =
   fmap Dataspace $
@@ -71,10 +64,10 @@ createDataspace shape =
         h5s_close
         [CU.exp| hid_t { H5Screate_simple($(int rank), $(const hsize_t* c_shape), $(const hsize_t* c_shape)) } |]
 
-isScalarDataspace :: (HasCallStack, MonadUnliftIO m) => Dataspace s -> HDF5 s m Bool
+isScalarDataspace :: (MonadUnliftIO m) => Dataspace s -> HDF5 s m Bool
 isScalarDataspace ((.rawHandle) -> h) = toBool <$> liftIO [CU.exp| bool { H5Sget_simple_extent_ndims($(hid_t h)) == 0 } |]
 
-h5s_close :: (HasCallStack, MonadIO m) => Hid -> m ()
+h5s_close :: (MonadIO m) => Hid -> m ()
 h5s_close h = void . liftIO $ [CU.exp| herr_t { H5Sclose($(hid_t h)) } |]
 
 data Hyperslab = Hyperslab
@@ -136,10 +129,10 @@ selectOperatorToCInt = \case
   H5S_SELECT_NOTB -> [CU.pure| int { H5S_SELECT_NOTB } |]
   H5S_SELECT_NOTA -> [CU.pure| int { H5S_SELECT_NOTA } |]
 
-selectHyperslab :: (HasCallStack, MonadUnliftIO m) => Hyperslab -> Dataspace s -> HDF5 s m (Dataspace s)
+selectHyperslab :: (MonadUnliftIO m) => Hyperslab -> Dataspace s -> HDF5 s m (Dataspace s)
 selectHyperslab = selectHyperslabWith H5S_SELECT_SET
 
-selectHyperslabWith :: (HasCallStack, MonadUnliftIO m) => H5S_seloper_t -> Hyperslab -> Dataspace s -> HDF5 s m (Dataspace s)
+selectHyperslabWith :: (MonadUnliftIO m) => H5S_seloper_t -> Hyperslab -> Dataspace s -> HDF5 s m (Dataspace s)
 selectHyperslabWith (selectOperatorToCInt -> combine) (Hyperslab start stride size block) ((.rawHandle) -> h) = do
   fmap Dataspace $
     createHandle h5s_close $
@@ -157,7 +150,7 @@ selectHyperslabWith (selectOperatorToCInt -> combine) (Hyperslab start stride si
                 return copy;
               } |]
 
-getDataspaceRank :: (HasCallStack, MonadUnliftIO m) => Dataspace s -> HDF5 s m Int
+getDataspaceRank :: (MonadUnliftIO m) => Dataspace s -> HDF5 s m Int
 getDataspaceRank ((.rawHandle) -> h) =
   fromIntegral <$> liftIO [CU.exp| int { H5Sget_simple_extent_ndims($(hid_t h)) } |]
 
@@ -169,21 +162,21 @@ getDataspaceShape dspace =
       pure . Just . V.toList $ V.zipWith (*) h.hyperslabCount h.hyperslabBlock
     _ -> pure Nothing
 
-unsafeGetShape :: (HasCallStack, MonadUnliftIO m) => Dataspace s -> HDF5 s m [Int]
+unsafeGetShape :: (MonadUnliftIO m) => Dataspace s -> HDF5 s m [Int]
 unsafeGetShape dspace@((.rawHandle) -> h) = do
   rank <- getDataspaceRank dspace
   allocaArray rank $ \shapePtr -> do
-    liftIO [CU.exp| int { H5Sget_simple_extent_dims($(hid_t h), $(hsize_t* shapePtr), NULL) } |]
+    _ <- liftIO [CU.exp| int { H5Sget_simple_extent_dims($(hid_t h), $(hsize_t* shapePtr), NULL) } |]
     fmap fromIntegral <$> peekArray rank shapePtr
 
-unsafeGetHyperslab :: (HasCallStack, MonadUnliftIO m) => Dataspace s -> HDF5 s m Hyperslab
-unsafeGetHyperslab dspace@((.rawHandle) -> h) = liftIO $ do
+unsafeGetHyperslab :: (MonadUnliftIO m) => Dataspace s -> HDF5 s m Hyperslab
+unsafeGetHyperslab ((.rawHandle) -> h) = liftIO $ do
   rank <- fromIntegral <$> [CU.exp| int { H5Sget_simple_extent_ndims($(hid_t h)) } |]
   start <- MV.new rank
   stride <- MV.new rank
   count <- MV.new rank
   block <- MV.new rank
-  MV.unsafeWith start $ \startPtr ->
+  _ <- MV.unsafeWith start $ \startPtr ->
     MV.unsafeWith stride $ \stridePtr ->
       MV.unsafeWith count $ \countPtr ->
         MV.unsafeWith block $ \blockPtr ->
@@ -244,7 +237,7 @@ hyperslabBoundingBox h =
       h.hyperslabCount
       h.hyperslabBlock
 
-createDataspaceForHyperslab :: (HasCallStack, MonadUnliftIO m) => Hyperslab -> HDF5 s m (Dataspace s)
+createDataspaceForHyperslab :: (MonadUnliftIO m) => Hyperslab -> HDF5 s m (Dataspace s)
 createDataspaceForHyperslab hyperslab = do
   dspace <- createDataspace (hyperslabBoundingBox hyperslab)
   isScalarDataspace dspace >>= \case

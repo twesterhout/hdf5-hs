@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskellQuotes #-}
 
 -- |
 -- Copyright: (c) 2020-2021 Tom Westerhout
@@ -15,7 +15,6 @@ where
 import Control.Monad.IO.Class (MonadIO)
 import Data.HDF5.Types
 import Data.Map qualified as Map
-import GHC.Stack
 import Language.C.Inline.Context (Context (..))
 import Language.C.Types qualified as Types
 import Language.Haskell.TH qualified as TH
@@ -40,5 +39,5 @@ h5TypesTable =
 h5Ctx :: Context
 h5Ctx = mempty {ctxTypesTable = h5TypesTable}
 
-fromHtri :: (HasCallStack, MonadIO m) => Htri -> m Bool
+fromHtri :: (MonadIO m) => Htri -> m Bool
 fromHtri = pure . (> 0)

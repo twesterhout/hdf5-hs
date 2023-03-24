@@ -11,34 +11,17 @@ module Data.HDF5.Object
   )
 where
 
-import Control.DeepSeq (NFData (..), deepseq, force)
-import Control.Monad (void)
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Resource
-import Control.Monad.Trans.Resource.Internal (ReleaseKey (..))
+import Control.DeepSeq (NFData (..), force)
 import Data.HDF5.Context
 import Data.HDF5.Types
-import Data.Int
-import Data.Some
-import Data.Text (Text, pack, unpack)
-import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text (unpack)
 import Data.Typeable
-import Data.Vector.Storable (Vector)
-import Data.Vector.Storable qualified as V
-import Data.Vector.Storable.Mutable qualified as MV
-import Data.Word
 import Foreign.C.Types
 import Foreign.Marshal hiding (void)
 import Foreign.Ptr (Ptr, nullPtr)
-import GHC.ForeignPtr (ForeignPtr (..))
-import GHC.Generics (Generic)
 import GHC.Records (HasField (..))
-import GHC.Stack
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
-import System.Directory (doesFileExist)
 import System.IO.Unsafe (unsafePerformIO)
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)

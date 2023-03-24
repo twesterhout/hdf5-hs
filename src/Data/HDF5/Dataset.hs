@@ -19,37 +19,29 @@ module Data.HDF5.Dataset
   )
 where
 
-import Control.DeepSeq (NFData)
 import Control.Monad (forM, unless, void)
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.Trans.Class
-import Control.Monad.Trans.Resource
 import Data.ByteString qualified as BS
 import Data.Coerce
 import Data.HDF5.Context
 import Data.HDF5.Dataspace
 import Data.HDF5.Datatype
-import Data.HDF5.File
 import Data.HDF5.Group
 import Data.HDF5.Object
 import Data.HDF5.Types
 import Data.Kind (Type)
-import Data.Some
-import Data.Text (Text, pack, unpack)
-import Data.Text qualified as T
+import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Vector.Storable (Vector)
 import Data.Vector.Storable qualified as V
-import Data.Vector.Storable.Mutable qualified as MV
 import Foreign.C.Types
 import Foreign.Ptr
-import GHC.Generics (Generic)
 import GHC.Stack
 import GHC.TypeLits
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
-import System.Directory (doesFileExist)
 import UnliftIO.Foreign
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
@@ -174,15 +166,15 @@ instance KnownDataset Text where
 instance MonadUnliftIO m => Allocatable m Text where
   fromPtrShape ptr shape = decodeUtf8 <$> fromPtrShape (coerce ptr) shape
 
-getDatatype :: (HasCallStack, MonadUnliftIO m) => Dataset s -> HDF5 s m (Datatype s)
+getDatatype :: (MonadUnliftIO m) => Dataset s -> HDF5 s m (Datatype s)
 getDatatype ((.rawHandle) -> dataset) = do
   Datatype <$> createHandle h5o_close [CU.exp| hid_t { H5Dget_type($(hid_t dataset)) } |]
 
-getDataspace :: (HasCallStack, MonadUnliftIO m) => Dataset s -> HDF5 s m (Dataspace s)
+getDataspace :: (MonadUnliftIO m) => Dataset s -> HDF5 s m (Dataspace s)
 getDataspace ((.rawHandle) -> dataset) = do
   Dataspace <$> createHandle h5s_close [CU.exp| hid_t { H5Dget_space($(hid_t dataset)) } |]
 
-createUnfilledDataset :: (HasCallStack, MonadUnliftIO m) => Group s -> Text -> Datatype s -> Dataspace s -> HDF5 s m (Dataset s)
+createUnfilledDataset :: (MonadUnliftIO m) => Group s -> Text -> Datatype s -> Dataspace s -> HDF5 s m (Dataset s)
 createUnfilledDataset ((.rawHandle) -> parent) (encodeUtf8 -> name) ((.rawHandle) -> dtype) ((.rawHandle) -> dspace) =
   Dataset
     <$> createHandle
@@ -208,7 +200,7 @@ writeDatasetExplicit
   -> [Int]
   -> [Int]
   -> HDF5 s m ()
-writeDatasetExplicit dataset@((.rawHandle) -> c_dataset) dataspace@((.rawHandle) -> c_file_space) (castPtr -> c_buf) shape strides = do
+writeDatasetExplicit dataset@((.rawHandle) -> c_dataset) ((.rawHandle) -> c_file_space) (castPtr -> c_buf) shape strides = do
   fileDType <- getDatatype dataset
   memDType@((.rawHandle) -> c_mem_dtype) <- createDatatype @a
   unless (fileDType == memDType) $
@@ -217,7 +209,7 @@ writeDatasetExplicit dataset@((.rawHandle) -> c_dataset) dataspace@((.rawHandle)
         <> show memDType
         <> " to a dataset containing "
         <> show fileDType
-  memDSpace@((.rawHandle) -> c_mem_space) <- createDataspaceForHyperslab (hyperslabForShapeStrides shape strides)
+  ((.rawHandle) -> c_mem_space) <- createDataspaceForHyperslab (hyperslabForShapeStrides shape strides)
   void $
     liftIO
       [CU.exp| herr_t { H5Dwrite($(hid_t c_dataset), $(hid_t c_mem_dtype),
@@ -253,7 +245,7 @@ readDatasetExplicit dataset@((.rawHandle) -> c_dset) ((.rawHandle) -> c_file_spa
         <> show memDType
         <> " from a dataset containing "
         <> show fileDType
-  memDSpace@((.rawHandle) -> c_mem_space) <- createDataspaceForHyperslab (hyperslabForShapeStrides shape strides)
+  ((.rawHandle) -> c_mem_space) <- createDataspaceForHyperslab (hyperslabForShapeStrides shape strides)
   void $
     liftIO
       [C.exp| herr_t { H5Dread($(hid_t c_dset), $(hid_t c_mem_type), $(hid_t c_mem_space),
@@ -272,7 +264,7 @@ readDatasetInto object dataset = do
 
 readDataset
   :: forall a m s
-   . (HasCallStack, MonadUnliftIO m, KnownDataset a, Allocatable m a)
+   . (KnownDataset a, Allocatable m a)
   => Dataset s
   -> HDF5 s m a
 readDataset dataset = do

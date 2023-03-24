@@ -9,33 +9,19 @@ module Data.HDF5.Datatype
   )
 where
 
-import Control.DeepSeq (NFData)
-import Control.Monad (void)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource
 import Data.ByteString qualified as BS
 import Data.HDF5.Context
-import Data.HDF5.Dataspace
-import Data.HDF5.File
 import Data.HDF5.Group
 import Data.HDF5.Object
 import Data.HDF5.Types
 import Data.Int
-import Data.Some
-import Data.Text (Text, pack, unpack)
-import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
-import Data.Vector.Storable (Vector)
-import Data.Vector.Storable qualified as V
-import Data.Vector.Storable.Mutable qualified as MV
+import Data.Text (Text)
 import Data.Word
 import Foreign.C.Types
-import Foreign.Marshal hiding (void)
-import GHC.Generics (Generic)
-import GHC.Stack
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
-import System.Directory (doesFileExist)
 
 C.context (C.baseCtx <> C.bsCtx <> C.funCtx <> h5Ctx)
 C.include "<hdf5.h>"
@@ -84,7 +70,7 @@ instance KnownDatatype CDouble where createDatatype = createStaticDatatype h5t_N
 
 instance KnownDatatype Double where createDatatype = createDatatype @CDouble
 
-getTextDatatype :: (HasCallStack, MonadUnliftIO m) => HDF5 s m (Datatype s)
+getTextDatatype :: (MonadUnliftIO m) => HDF5 s m (Datatype s)
 getTextDatatype =
   Datatype
     <$> createHandle
@@ -109,7 +95,7 @@ instance KnownDatatype String where createDatatype = getTextDatatype
 
 instance KnownDatatype BS.ByteString where createDatatype = getTextDatatype
 
-getDatatypeSize :: (HasCallStack, MonadUnliftIO m) => Datatype s -> HDF5 s m Int
+getDatatypeSize :: (MonadUnliftIO m) => Datatype s -> HDF5 s m Int
 getDatatypeSize ((.rawHandle) -> h) =
   fromIntegral
     <$> liftIO

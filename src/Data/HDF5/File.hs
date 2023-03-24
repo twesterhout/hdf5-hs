@@ -12,7 +12,6 @@ module Data.HDF5.File
   )
 where
 
-import Control.DeepSeq (NFData)
 import Control.Monad (void)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource
@@ -21,12 +20,7 @@ import Data.HDF5.Object
 import Data.HDF5.Types
 import Data.Text
 import Data.Text.Encoding
-import Data.Vector.Storable (Vector)
-import Data.Vector.Storable qualified as V
-import Data.Vector.Storable.Mutable qualified as MV
 import Foreign.C.Types
-import GHC.Generics (Generic)
-import GHC.Stack
 import Language.C.Inline qualified as C
 import Language.C.Inline.Unsafe qualified as CU
 import System.Directory (doesFileExist)
@@ -41,7 +35,7 @@ data AccessFlags
   deriving stock (Read, Show, Eq)
 
 withFile
-  :: (HasCallStack, MonadUnliftIO m)
+  :: (MonadUnliftIO m)
   => Text
   -- ^ filename
   -> AccessFlags
@@ -52,7 +46,7 @@ withFile
 withFile path flags action = runHDF5 $ openFile path flags >>= getRoot >>= action
 
 openFile
-  :: (HasCallStack, MonadUnliftIO m)
+  :: (MonadUnliftIO m)
   => Text
   -- ^ filename
   -> AccessFlags
@@ -78,17 +72,17 @@ openFile filename@(encodeUtf8 -> c_filename) flags@(accessFlagsToUInt -> c_flags
         h5f_close
         [CU.exp| hid_t { H5Fcreate($bs-cstr:c_filename, $(unsigned int c_flags), H5P_DEFAULT, H5P_DEFAULT) } |]
 
-h5f_close :: HasCallStack => Hid -> IO ()
+h5f_close :: Hid -> IO ()
 h5f_close h = void [CU.exp| herr_t { H5Fclose($(hid_t h)) } |]
 
 -- | Get the file in which the object is stored.
-getFile :: (HasCallStack, MonadUnliftIO m) => Object s t -> HDF5 s m (File s)
+getFile :: (MonadUnliftIO m) => Object s t -> HDF5 s m (File s)
 getFile ((.rawHandle) -> h) =
   File
     <$> createHandle h5f_close [CU.exp| hid_t { H5Iget_file_id($(hid_t h)) } |]
 
 -- | Get the group corresponding to the root of the file.
-getRoot :: (HasCallStack, MonadUnliftIO m) => Object s t -> HDF5 s m (Group s)
+getRoot :: (MonadUnliftIO m) => Object s t -> HDF5 s m (Group s)
 getRoot object =
   getFile object >>= \case
     File h -> pure $ Group h
