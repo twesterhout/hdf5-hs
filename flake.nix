@@ -1,101 +1,57 @@
 {
-  description = "twesterhout/hdf5-hs: bindings to HDF5";
-
-  nixConfig = {
-    extra-experimental-features = "nix-command flakes";
-  };
+  description = "twesterhout/hdf5-hs: high-level bindings to HDF5";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     nix-filter.url = "github:numtide/nix-filter";
-    flake-compat = {
-      url = "github:edolstra/flake-compat";
-      flake = false;
-    };
   };
 
-  outputs = inputs: inputs.flake-utils.lib.eachDefaultSystem (system:
-    with builtins;
+  outputs = inputs:
     let
       inherit (inputs.nixpkgs) lib;
-      pkgs = import inputs.nixpkgs { inherit system; };
-
-      src = inputs.nix-filter.lib {
-        root = ./.;
-        include = [
-          "app"
-          "cbits"
-          "example"
-          "src"
-          "test"
-          "hdf5-hs.cabal"
-          "LICENSE"
-          "README.md"
-        ];
+      haskell-overlay = self: super: {
+        haskell = super.haskell // {
+          packageOverrides = lib.composeManyExtensions [
+            super.haskell.packageOverrides
+            (hself: hsuper: {
+              hdf5-hs = hself.callCabal2nix "hdf5-hs" ./. {
+                hdf5 = super.hdf5;
+                hdf5_hl = super.hdf5;
+              };
+            })
+          ];
+        };
       };
 
-      haskellPackagesOverride = ps:
-        ps.override
-          {
-            overrides = self: super: {
-              hdf5-hs = self.callCabal2nix "hdf5-hs" src {
-                hdf5 = pkgs.hdf5;
-                hdf5_hl = pkgs.hdf5;
-              };
-            };
-          };
+      pkgs-for = system: import inputs.nixpkgs {
+        inherit system;
+        overlays = [ haskell-overlay ];
+      };
+    in
+    {
+      overlays.default = haskell-overlay;
 
-      outputsFor =
-        { haskellPackages
-        , name
-        , package ? ""
-        , ...
-        }:
-        let
-          ps = haskellPackagesOverride haskellPackages;
-        in
+      packages = inputs.flake-utils.lib.eachDefaultSystemMap (system:
+        with pkgs-for system; {
+          inherit haskell;
+          default = haskellPackages.hdf5-hs;
+        });
+
+      devShells = inputs.flake-utils.lib.eachDefaultSystemMap (system:
         {
-          packages."${name}" = ps.${package} or ps;
-          devShells."${name}" = ps.shellFor {
-            packages = ps: with ps; [ hdf5-hs ];
-            # withHoogle = true;
-            nativeBuildInputs = with pkgs; with ps; [
-              # Building and testing
+          default = with pkgs-for system; haskellPackages.shellFor {
+            packages = ps: [ ps.hdf5-hs ];
+            withHoogle = true;
+            nativeBuildInputs = with haskellPackages; [
               cabal-install
-              # Language servers
+              cabal-fmt
+              fourmolu
               haskell-language-server
               nil
-              # Formatters
-              fourmolu
-              cabal-fmt
               nixpkgs-fmt
-              # Previewing markdown files
-              python3Packages.grip
-              # For debugging Halide
-              # gcc
-              # zlib
-              # gdb
             ];
-            shellHook = ''
-              export LD_LIBRARY_PATH=${pkgs.hdf5}/lib:$LD_LIBRARY_PATH
-            '';
           };
-          formatter = pkgs.nixpkgs-fmt;
-        };
-    in
-    foldl' (acc: conf: lib.recursiveUpdate acc (outputsFor conf)) { }
-      (lib.mapAttrsToList (name: haskellPackages: { inherit name haskellPackages; })
-        (lib.filterAttrs (_: ps: ps ? ghc) pkgs.haskell.packages) ++ [
-        {
-          haskellPackages = pkgs.haskellPackages;
-          name = "defaultGhc";
-        }
-        {
-          haskellPackages = pkgs.haskellPackages;
-          name = "default";
-          package = "hdf5-hs";
-        }
-      ])
-  );
+        });
+    };
 }
